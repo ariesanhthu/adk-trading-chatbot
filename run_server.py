@@ -3,7 +3,6 @@ import os
 import uvicorn
 
 if __name__ == "__main__":
-{
     port = int(os.environ.get("PORT", 8000))
 
     uvicorn.run(
@@ -13,4 +12,3 @@ if __name__ == "__main__":
         reload=False,
         workers=1,
     )
-}

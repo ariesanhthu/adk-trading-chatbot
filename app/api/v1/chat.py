@@ -117,7 +117,7 @@ def _extract_symbol_from_reply(reply: str) -> Optional[str]:
 def _parse_ui_effects_from_reply(reply: str, query: str) -> list[FeatureInstruction]:
     """
     Parse agent reply để detect UI effects cần thiết
-    
+
     Logic:
     - Nếu reply có số liệu giá → có thể show chart
     - Nếu reply có bảng dữ liệu → table
@@ -146,9 +146,7 @@ def _parse_ui_effects_from_reply(reply: str, query: str) -> list[FeatureInstruct
                         currentPrice=0.0,  # Placeholder, should be filled by agent
                         steps=[
                             BuyFlowStep(id="choose_volume", title="Chọn khối lượng"),
-                            BuyFlowStep(
-                                id="choose_price", title="Chọn giá đặt lệnh"
-                            ),
+                            BuyFlowStep(id="choose_price", title="Chọn giá đặt lệnh"),
                             BuyFlowStep(id="confirm", title="Xác nhận lệnh"),
                         ],
                     )
@@ -156,7 +154,9 @@ def _parse_ui_effects_from_reply(reply: str, query: str) -> list[FeatureInstruct
             )
 
     # Phát hiện yêu cầu xem tin tức
-    if any(kw in query_lower or kw in reply_lower for kw in ["tin tức", "news", "sự kiện"]):
+    if any(
+        kw in query_lower or kw in reply_lower for kw in ["tin tức", "news", "sự kiện"]
+    ):
         # Cần trích xuất dữ liệu tin tức từ agent
         pass
 
@@ -173,7 +173,7 @@ def _parse_ui_effects_from_reply(reply: str, query: str) -> list[FeatureInstruct
 def _generate_suggestions(reply: str, query: str) -> list[SuggestionMessage]:
     """
     Generate suggestion messages dựa trên reply và query
-    
+
     Logic:
     - Nếu reply về giá → suggest xem lịch sử
     - Nếu reply về 1 mã → suggest so sánh
@@ -186,7 +186,9 @@ def _generate_suggestions(reply: str, query: str) -> list[SuggestionMessage]:
     query_lower = query.lower()
 
     # Gợi ý dữ liệu lịch sử nếu nói về giá hiện tại
-    if any(kw in reply_lower for kw in ["giá hiện tại", "giá hôm nay", "current price"]):
+    if any(
+        kw in reply_lower for kw in ["giá hiện tại", "giá hôm nay", "current price"]
+    ):
         suggestions.append(
             SuggestionMessage(
                 text="Xem lịch sử giá 1 tháng qua",
@@ -231,9 +233,7 @@ def _generate_suggestions(reply: str, query: str) -> list[SuggestionMessage]:
     # Luôn gợi ý trợ giúp
     if not suggestions:
         suggestions.append(
-            SuggestionMessage(
-                text="Tôi có thể hỏi gì khác?", action="help", icon="❓"
-            )
+            SuggestionMessage(text="Tôi có thể hỏi gì khác?", action="help", icon="❓")
         )
 
     return suggestions[:3]  # Max 3 suggestions
@@ -246,7 +246,7 @@ async def chat(
 ):
     """
     Nhận messages từ web, gọi ADK agent, trả text + ui_effects + suggestions.
-    
+
     Flow:
     1. Extract user message
     2. Run agent
@@ -337,6 +337,7 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
 
     reply_text = ""
     events_dump = []
+    text_parts = []  # Accumulate text từ nhiều events
 
     for event in runner.run(
         user_id=user_id,
@@ -345,7 +346,8 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
     ):
         # Parse event text từ nhiều cấu trúc khác nhau
         event_text = None
-        
+        event_author = getattr(event, "author", None)
+
         # Thử 1: event.content.parts[0].text (định dạng ADK chuẩn)
         if hasattr(event, "content") and event.content is not None:
             if hasattr(event.content, "parts") and event.content.parts:
@@ -353,18 +355,18 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
                     if hasattr(part, "text") and part.text:
                         event_text = part.text
                         break
-        
+
         # Thử 2: event.text (simple format)
         if not event_text and hasattr(event, "text") and event.text:
             event_text = event.text
-        
+
         # Thử 3: event.message (một số phiên bản ADK)
         if not event_text and hasattr(event, "message") and event.message:
             if isinstance(event.message, str):
                 event_text = event.message
             elif hasattr(event.message, "text"):
                 event_text = event.message.text
-        
+
         # Thử 4: Kiểm tra xem event có phải là Content type không
         if not event_text:
             try:
@@ -380,7 +382,7 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
         # Lưu thông tin event để debug
         try:
             event_info = {
-                "author": getattr(event, "author", None),
+                "author": event_author,
                 "has_is_final": hasattr(event, "is_final_response"),
                 "text": event_text,
                 "type": type(event).__name__,
@@ -389,9 +391,12 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
         except Exception:
             pass
 
-        # Cập nhật reply với text mới nhất
-        if event_text:
-            reply_text = event_text
+        # Chỉ accumulate text từ model response (author="model"), không lấy tool calls
+        if event_text and event_author == "model":
+            text_parts.append(event_text)
+
+    # Join tất cả text parts thành một response hoàn chỉnh
+    reply_text = "\n".join(text_parts).strip()
 
     return reply_text, events_dump
 
@@ -419,16 +424,19 @@ async def _run_agent(
     except Exception as e:
         # Log error nhưng không crash - trả về error message
         import traceback
+
         error_trace = traceback.format_exc()
         print(f"[ERROR] Agent runner failed: {e}")
         print(f"[ERROR] Traceback: {error_trace}")
-        
+
         # Return friendly error message thay vì HTTP 500
         reply_text = f"Xin lỗi, đã có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại."
-        events_dump = [{
-            "error": str(e),
-            "error_type": type(e).__name__,
-        }]
+        events_dump = [
+            {
+                "error": str(e),
+                "error_type": type(e).__name__,
+            }
+        ]
 
     if not reply_text:
         reply_text = "[DEBUG] Agent không trả về text – kiểm tra raw_agent_output.events để debug."
