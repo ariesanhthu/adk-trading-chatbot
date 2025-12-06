@@ -9,7 +9,7 @@ from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from ..deps import get_agent
-from ...schemas.chat import ChatRequest, ChatResponse
+from ...schemas.chat import ChatRequest, ChatResponse, SuggestionMessage
 from ...schemas.ui import (
     ShowMarketOverviewInstruction,
     OpenBuyStockInstruction,
@@ -114,13 +114,145 @@ def _extract_symbol_from_reply(reply: str) -> Optional[str]:
     return None
 
 
+def _parse_ui_effects_from_reply(reply: str, query: str) -> list[FeatureInstruction]:
+    """
+    Parse agent reply để detect UI effects cần thiết
+    
+    Logic:
+    - Nếu reply có số liệu giá → có thể show chart
+    - Nếu reply có bảng dữ liệu → table
+    - Nếu có so sánh nhiều mã → comparison
+    """
+    effects = []
+    reply_lower = reply.lower()
+    query_lower = query.lower()
+
+    # Phát hiện nhu cầu xem tổng quan thị trường
+    if any(
+        kw in query_lower or kw in reply_lower
+        for kw in ["tổng quan", "market overview", "thị trường chung"]
+    ):
+        effects.append(ShowMarketOverviewInstruction())
+
+    # Phát hiện ý định mua cổ phiếu
+    if any(kw in query_lower for kw in ["mua", "buy", "đặt lệnh"]):
+        symbol = _extract_symbol_from_reply(reply) or _extract_symbol_from_reply(query)
+        if symbol:
+            # Hướng dẫn mua đơn giản - giá thực sẽ lấy từ agent
+            effects.append(
+                OpenBuyStockInstruction(
+                    payload=BuyStockData(
+                        symbol=symbol,
+                        currentPrice=0.0,  # Placeholder, should be filled by agent
+                        steps=[
+                            BuyFlowStep(id="choose_volume", title="Chọn khối lượng"),
+                            BuyFlowStep(
+                                id="choose_price", title="Chọn giá đặt lệnh"
+                            ),
+                            BuyFlowStep(id="confirm", title="Xác nhận lệnh"),
+                        ],
+                    )
+                )
+            )
+
+    # Phát hiện yêu cầu xem tin tức
+    if any(kw in query_lower or kw in reply_lower for kw in ["tin tức", "news", "sự kiện"]):
+        # Cần trích xuất dữ liệu tin tức từ agent
+        pass
+
+    # Phát hiện yêu cầu xem chi tiết cổ phiếu
+    symbol = _extract_symbol_from_reply(query)
+    if symbol and any(
+        kw in query_lower for kw in ["chi tiết", "detail", "thông tin", "báo cáo"]
+    ):
+        effects.append(OpenStockDetailInstruction(payload={"symbol": symbol}))
+
+    return effects
+
+
+def _generate_suggestions(reply: str, query: str) -> list[SuggestionMessage]:
+    """
+    Generate suggestion messages dựa trên reply và query
+    
+    Logic:
+    - Nếu reply về giá → suggest xem lịch sử
+    - Nếu reply về 1 mã → suggest so sánh
+    - Luôn suggest câu hỏi tương tự
+    """
+    import re
+
+    suggestions = []
+    reply_lower = reply.lower()
+    query_lower = query.lower()
+
+    # Gợi ý dữ liệu lịch sử nếu nói về giá hiện tại
+    if any(kw in reply_lower for kw in ["giá hiện tại", "giá hôm nay", "current price"]):
+        suggestions.append(
+            SuggestionMessage(
+                text="Xem lịch sử giá 1 tháng qua",
+                action="query:lịch sử giá",
+                icon="📊",
+            )
+        )
+
+    # Gợi ý so sánh nếu chỉ nhắc 1 cổ phiếu
+    symbols = re.findall(r"\b([A-Z]{3,4})\b", query)
+    if len(symbols) == 1:
+        suggestions.append(
+            SuggestionMessage(
+                text=f"So sánh {symbols[0]} với mã khác",
+                action=f"query:so sánh {symbols[0]}",
+                icon="🔍",
+            )
+        )
+
+    # Gợi ý thông tin tài chính nếu hỏi về giá
+    if any(kw in query_lower for kw in ["giá", "price"]):
+        suggestions.append(
+            SuggestionMessage(
+                text="Xem báo cáo tài chính",
+                action="query:báo cáo tài chính",
+                icon="📈",
+            )
+        )
+
+    # Gợi ý mua nếu nói về giá
+    if any(kw in reply_lower for kw in ["giá", "price"]) and "mua" not in query_lower:
+        symbol = _extract_symbol_from_reply(query)
+        if symbol:
+            suggestions.append(
+                SuggestionMessage(
+                    text=f"Mua {symbol}",
+                    action=f"buy:{symbol}",
+                    icon="💰",
+                )
+            )
+
+    # Luôn gợi ý trợ giúp
+    if not suggestions:
+        suggestions.append(
+            SuggestionMessage(
+                text="Tôi có thể hỏi gì khác?", action="help", icon="❓"
+            )
+        )
+
+    return suggestions[:3]  # Max 3 suggestions
+
+
 @router.post("", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
     agent=Depends(get_agent),
 ):
     """
-    Nhận messages từ web, gọi ADK agent, trả text + ui_effects.
+    Nhận messages từ web, gọi ADK agent, trả text + ui_effects + suggestions.
+    
+    Flow:
+    1. Extract user message
+    2. Run agent
+    3. Parse UI effects từ reply
+    4. Generate suggestions
+    5. Return ChatResponse
     """
     if not payload.messages:
         raise HTTPException(status_code=400, detail="messages is required")
@@ -140,15 +272,27 @@ async def chat(
         elif msg.role == "assistant":
             conversation_history.append({"role": "assistant", "content": msg.content})
 
+    # Run agent
     agent_result = await _run_agent(
         agent, user_message, conversation_history, payload.meta
     )
 
     reply_text = agent_result.get("reply", "")
 
+    # Import services để parse UI và generate suggestions
+    from ...services import parse_ui_effects, extract_intent, generate_suggestions
+
+    # Parse UI effects
+    ui_effects = parse_ui_effects(reply_text, user_message)
+
+    # Extract intent và generate suggestions
+    intent = extract_intent(reply_text, user_message)
+    suggestions = generate_suggestions(reply_text, user_message, intent)
+
     return ChatResponse(
         reply=reply_text,
-        ui_effects=[],
+        ui_effects=ui_effects,
+        suggestion_messages=suggestions,
         raw_agent_output=agent_result,
     )
 
@@ -199,30 +343,53 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
         session_id=session_id,
         new_message=content,
     ):
-        print("=== RAW EVENT ===")
-        print("TYPE:", type(event))
-        print("DIR:", [a for a in dir(event) if not a.startswith("_")])
-        try:
-            print("REPR:", repr(event))
-        except Exception:
-            pass
-
+        # Parse event text từ nhiều cấu trúc khác nhau
         event_text = None
-        if getattr(event, "content", None) is not None:
-            parts = getattr(event.content, "parts", None)
-            if parts and len(parts) > 0 and getattr(parts[0], "text", None) is not None:
-                event_text = parts[0].text
+        
+        # Thử 1: event.content.parts[0].text (định dạng ADK chuẩn)
+        if hasattr(event, "content") and event.content is not None:
+            if hasattr(event.content, "parts") and event.content.parts:
+                for part in event.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        event_text = part.text
+                        break
+        
+        # Thử 2: event.text (simple format)
+        if not event_text and hasattr(event, "text") and event.text:
+            event_text = event.text
+        
+        # Thử 3: event.message (một số phiên bản ADK)
+        if not event_text and hasattr(event, "message") and event.message:
+            if isinstance(event.message, str):
+                event_text = event.message
+            elif hasattr(event.message, "text"):
+                event_text = event.message.text
+        
+        # Thử 4: Kiểm tra xem event có phải là Content type không
+        if not event_text:
+            try:
+                # Đôi khi event CHÍNH LÀ Content object
+                if hasattr(event, "parts") and event.parts:
+                    for part in event.parts:
+                        if hasattr(part, "text") and part.text:
+                            event_text = part.text
+                            break
+            except Exception:
+                pass
 
+        # Lưu thông tin event để debug
         try:
             event_info = {
                 "author": getattr(event, "author", None),
                 "has_is_final": hasattr(event, "is_final_response"),
                 "text": event_text,
+                "type": type(event).__name__,
             }
             events_dump.append(event_info)
         except Exception:
             pass
 
+        # Cập nhật reply với text mới nhất
         if event_text:
             reply_text = event_text
 
@@ -250,7 +417,18 @@ async def _run_agent(
             user_message,
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Agent runner error: {e}")
+        # Log error nhưng không crash - trả về error message
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[ERROR] Agent runner failed: {e}")
+        print(f"[ERROR] Traceback: {error_trace}")
+        
+        # Return friendly error message thay vì HTTP 500
+        reply_text = f"Xin lỗi, đã có lỗi xảy ra khi xử lý yêu cầu. Vui lòng thử lại."
+        events_dump = [{
+            "error": str(e),
+            "error_type": type(e).__name__,
+        }]
 
     if not reply_text:
         reply_text = "[DEBUG] Agent không trả về text – kiểm tra raw_agent_output.events để debug."

@@ -9,7 +9,11 @@ from .api.v1.chat import router as chat_router
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
-    app = FastAPI(title=settings.PROJECT_NAME)
+    app = FastAPI(
+        title=settings.PROJECT_NAME,
+        description="VNStock Agent API with Vietnamese support",
+        version="1.0.0",
+    )
 
     # CORS
     app.add_middleware(
@@ -25,7 +29,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok"}
+        return {"status": "ok", "service": "vnstock-agent"}
 
     return app
 

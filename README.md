@@ -18,6 +18,59 @@ adk web --port 8001
 
 Agent sẽ tự động load MCP tools từ `vnstock-mcp-server` qua stdio transport.
 
+### Chạy với Docker (FastAPI + ADK)
+
+#### Yêu cầu
+
+- Docker và Docker Compose đã cài đặt
+- File `.env` trong thư mục `test-adk/` với `GOOGLE_API_KEY`:
+
+```env
+GOOGLE_API_KEY=AIza...        # BẮT BUỘC
+MCP_SERVER_URL=https://mcp-server-vietnam-stock-trading.onrender.com
+MCP_TIMEOUT=30
+```
+
+#### Build và chạy
+
+```bash
+cd test-adk
+
+# Build image
+docker-compose build
+
+# Chạy container
+docker-compose up -d
+
+# Xem logs
+docker-compose logs -f
+
+# Dừng container
+docker-compose down
+```
+
+API sẽ chạy tại `http://localhost:8002`:
+
+- Health check: `GET http://localhost:8002/health`
+- Chat endpoint: `POST http://localhost:8002/api/v1/chat`
+
+#### Cấu trúc Docker
+
+- `Dockerfile`: Multi-stage build với Python 3.13, dùng `uv` để cài dependencies từ `pyproject.toml` và `uv.lock`
+- `docker-compose.yml`: Cấu hình service với env vars, health check, port mapping
+- `.dockerignore`: Loại trừ files không cần thiết khi build
+
+**Lưu ý**: Dockerfile sử dụng `uv sync --frozen` để cài dependencies, đảm bảo versions chính xác từ `uv.lock`. Cả FastAPI và ADK agent đều chạy trong cùng container.
+
+#### Environment Variables
+
+Các biến môi trường có thể set trong `.env` hoặc override trong `docker-compose.yml`:
+
+- `GOOGLE_API_KEY` (bắt buộc): API key cho Google AI (Gemini)
+- `MCP_SERVER_URL`: URL của MCP server (default trong `configs/mcp_config.yaml`)
+- `MCP_TIMEOUT`: Timeout cho MCP requests (default: 30)
+- `BACKEND_CORS_ORIGINS`: CORS origins cho FastAPI (default: `*`)
+
 ### Cấu trúc
 
 ```

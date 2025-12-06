@@ -10,7 +10,6 @@ Có thể override bằng biến môi trường MCP_SERVER_URL và MCP_TIMEOUT.
 
 import json
 import os
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -20,10 +19,10 @@ import yaml
 from google.adk.agents import LlmAgent
 from dotenv import load_dotenv
 
-# Load environment variables (GOOGLE_API_KEY, etc.) từ .env nếu có
+# Load biến môi trường (GOOGLE_API_KEY, v.v.) từ .env nếu có
 load_dotenv()
 
-# Load MCP config từ configs/mcp_config.yaml
+# Load cấu hình MCP từ configs/mcp_config.yaml
 _CONFIG_DIR = Path(__file__).parent.parent / "configs"
 _CONFIG_FILE = _CONFIG_DIR / "mcp_config.yaml"
 
@@ -418,7 +417,17 @@ def _create_mcp_tool_function(tool_name: str, tool_schema: Dict[str, Any]):
 
         # Tạo type annotation string
         if param_type == "array":
-            type_annotation = "list"
+            # FIX: Gemini API yêu cầu List[item_type] thay vì list
+            items_schema = param_schema.get("items", {})
+            items_type = items_schema.get("type", "str")
+            if items_type == "string":
+                type_annotation = "List[str]"
+            elif items_type == "integer":
+                type_annotation = "List[int]"
+            elif items_type == "number":
+                type_annotation = "List[float]"
+            else:
+                type_annotation = "List[Any]"
         elif param_type == "string":
             type_annotation = "str"
         elif param_type == "integer":
@@ -521,7 +530,9 @@ def _create_mcp_tool_function(tool_name: str, tool_schema: Dict[str, Any]):
     namespace = {
         "__name__": __name__,
         "__builtins__": __builtins__,
+        "Any": Any,  # Import Any để dùng trong function signature
         "Optional": Optional,  # Import Optional để dùng trong function signature
+        "List": List,  # Import List để dùng trong function signature (List[str], List[int], etc.)
         "_call_mcp_jsonrpc_func": _call_mcp_jsonrpc,  # Alias để tránh conflict
         "_process_arguments_func": _process_arguments,  # Alias để tránh conflict
         "print": print,  # Đảm bảo print function có sẵn

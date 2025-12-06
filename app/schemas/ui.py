@@ -65,7 +65,7 @@ class OpenStockDetailInstruction(BaseModel):
     payload: StockDetailData
 
 
-# Union type for all feature instructions
+# Union type cho tất cả feature instructions
 FeatureInstruction = (
     ShowMarketOverviewInstruction
     | OpenBuyStockInstruction

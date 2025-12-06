@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  fastapi-adk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vnstock-agent-api
+    ports:
+      - "8002:8002"
+    environment:
+      # Google AI API key (BẮT BUỘC)
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      # MCP Server config (optional, có default trong configs/mcp_config.yaml)
+      - MCP_SERVER_URL=${MCP_SERVER_URL:-https://mcp-server-vietnam-stock-trading.onrender.com}
+      - MCP_TIMEOUT=${MCP_TIMEOUT:-30}
+      # FastAPI settings
+      - BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS:-*}
+    env_file:
+      - .env
+    volumes:
+      # Mount configs để có thể chỉnh sửa mà không rebuild
+      - ./configs:/app/configs:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
