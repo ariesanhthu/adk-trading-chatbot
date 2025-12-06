@@ -11,8 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Cài uv (package manager nhanh cho Python) qua pip
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files (cần cả uv.lock để đảm bảo versions chính xác)
-COPY pyproject.toml uv.lock ./
+# Copy dependency files và code cần thiết để build package
+# Cần README.md vì pyproject.toml có readme = "README.md"
+# Cần các package directories vì pyproject.toml có packages = ["app", "agents", "configs", "utils"]
+COPY pyproject.toml uv.lock README.md ./
+COPY app/ ./app/
+COPY agents/ ./agents/
+COPY configs/ ./configs/
+COPY utils/ ./utils/
 
 # Sync dependencies với uv (tạo .venv và cài tất cả packages)
 # --frozen: dùng chính xác versions từ uv.lock, không update
