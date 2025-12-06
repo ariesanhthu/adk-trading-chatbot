@@ -3,15 +3,13 @@ FROM python:3.13-slim as builder
 
 WORKDIR /build
 
-# Cài build dependencies và curl (để cài uv)
+# Cài build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Cài uv (package manager nhanh cho Python)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+# Cài uv (package manager nhanh cho Python) qua pip
+RUN pip install --no-cache-dir uv
 
 # Copy dependency files (cần cả uv.lock để đảm bảo versions chính xác)
 COPY pyproject.toml uv.lock ./
