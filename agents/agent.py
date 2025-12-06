@@ -635,9 +635,10 @@ if not tools:
         f"Ensure MCP server is running at {MCP_SERVER_URL}"
     )
 
-# Tạo agent với MCP tools
+# Tạo agent với MCP tools - sử dụng Google Gemini
+# API key: set GOOGLE_API_KEY trong .env
 root_agent = LlmAgent(
-    model="gemini-2.5-flash",
+    model="gemini-2.5-flash",  # Google Gemini model
     name="vnstock_agent",
     description=(
         "Assistant chuyên về thị trường chứng khoán Việt Nam. "

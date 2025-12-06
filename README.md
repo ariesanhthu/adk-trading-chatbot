@@ -26,7 +26,7 @@ Agent sẽ tự động load MCP tools từ `vnstock-mcp-server` qua stdio trans
 - File `.env` trong thư mục `test-adk/` với `GOOGLE_API_KEY`:
 
 ```env
-GOOGLE_API_KEY=AIza...        # BẮT BUỘC
+GOOGLE_API_KEY=AIza...        # BẮT BUỘC - Lấy từ https://aistudio.google.com/app/apikey
 MCP_SERVER_URL=https://mcp-server-vietnam-stock-trading.onrender.com
 MCP_TIMEOUT=30
 ```
