@@ -934,6 +934,7 @@ try:
         get_stock_data,
         get_all_stocks,
         get_vn30_history,
+        suggest_stocks,
     )
 
     backend_tools = [
@@ -948,10 +949,11 @@ try:
         get_stock_data,
         get_all_stocks,
         get_vn30_history,
+        suggest_stocks,
     ]
     tools.extend(backend_tools)
     print(
-        f"✅ Added {len(backend_tools)} backend API tools (user actions + market cache)"
+        f"✅ Added {len(backend_tools)} backend API tools (user actions + market cache + stock suggestions)"
     )
     print(
         f"📊 Total tools available: {len(tools)} ({len(mcp_tools)} MCP + {len(backend_tools)} Backend API + 1 custom)"
@@ -1142,6 +1144,21 @@ Khi người dùng hỏi về ngày/giờ hiện tại:
 1. LUÔN gọi tool `get_current_datetime` để lấy thời gian thực
 2. Sử dụng kết quả từ tool để trả lời chính xác BẰNG MỘT CÂU VĂN HOÀN CHỈNH
 3. KHÔNG BAO GIỜ tự đoán hoặc dùng kiến thức cũ về ngày tháng
+
+Khi người dùng hỏi về GỢI Ý CỔ PHIẾU hoặc muốn được tư vấn cổ phiếu phù hợp:
+1. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+2. Sử dụng tool `suggest_stocks` để lấy gợi ý top 3 cổ phiếu phù hợp
+3. Tool này sẽ tự động:
+   - Lấy thông tin user profile (balance, risk profile)
+   - Lấy transaction history và stats để phân tích risk tolerance
+   - Lấy top 20 mã cổ phiếu từ market data
+   - Phân tích và gợi ý top 3 mã phù hợp nhất dựa trên:
+     * Risk profile (conservative/moderate/aggressive)
+     * Số dư tài khoản
+     * Lịch sử giao dịch và tỷ lệ thắng
+     * Xu hướng thị trường (giá, volume, changePercent)
+4. Trả lời bằng text trình bày top 3 mã được gợi ý kèm lý do cho từng mã
+5. Ví dụ response: "Dựa trên phân tích profile của bạn, tôi gợi ý 3 mã cổ phiếu phù hợp: (1) VCB - Mã blue-chip ổn định, phù hợp với risk profile conservative... (2) VNM - ... (3) FPT - ..."
 
 Luôn trả lời bằng tiếng Việt và cung cấp thông tin chính xác, đầy đủ dựa trên dữ liệu THỰC TẾ từ MCP server. MỖI RESPONSE PHẢI LÀ MỘT ĐOẠN TEXT HOÀN CHỈNH, KHÔNG ĐƯỢC ĐỂ TRỐNG.""",
     tools=tools,

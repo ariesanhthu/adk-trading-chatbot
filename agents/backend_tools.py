@@ -507,3 +507,240 @@ def get_vn30_history(days: int = 30) -> Dict[str, Any]:
         >>> history = result.get("metadata", {}).get("history", [])
     """
     return _call_backend_api("GET", "market/history/vn30", params={"days": days})
+
+
+def suggest_stocks(userId: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Gợi ý top 3 cổ phiếu phù hợp dựa trên thông tin người dùng và top 20 mã cổ phiếu.
+
+    Tool này sẽ:
+    1. Lấy thông tin user profile (balance, risk profile)
+    2. Lấy transaction history và stats để phân tích risk tolerance
+    3. Lấy top 20 mã cổ phiếu từ market data
+    4. Phân tích và gợi ý top 3 mã phù hợp nhất
+
+    Args:
+        userId: ID người dùng (optional - sẽ tự động lấy từ context nếu không có)
+
+    Returns:
+        Dict chứa top 3 mã cổ phiếu được gợi ý với lý do hoặc error
+
+    Example:
+        >>> result = suggest_stocks()
+        >>> suggestions = result.get("metadata", {}).get("suggestions", [])
+        >>> # suggestions = [
+        >>> #     {"symbol": "VCB", "reason": "Phù hợp với risk profile...", "score": 0.95},
+        >>> #     {"symbol": "VNM", "reason": "...", "score": 0.88},
+        >>> #     {"symbol": "FPT", "reason": "...", "score": 0.82}
+        >>> # ]
+    """
+    # Tự động lấy userId nếu không được cung cấp
+    if not userId:
+        userId = _extract_user_id_from_message()
+        if not userId:
+            return {
+                "error": "userId is required",
+                "message": "Please provide userId parameter or include it in your message",
+                "suggestion": "Include userId in your request (e.g., 'User ID của mình là demo')",
+            }
+
+    try:
+        # 1. Lấy user profile
+        profile_result = get_user_profile(userId)
+        if "error" in profile_result:
+            return {
+                "error": "Failed to get user profile",
+                "message": profile_result.get("message", "Unknown error"),
+            }
+
+        profile = profile_result.get("metadata", {})
+        balance = profile.get("balance", 0)
+        user_name = profile.get("user_fullName") or profile.get("fullName", "User")
+
+        # 2. Lấy transaction history và stats
+        history_result = get_transaction_history(userId)
+        stats_result = get_transaction_stats(userId)
+
+        transactions = []
+        if "error" not in history_result:
+            transactions = history_result.get("metadata", [])
+
+        stats = {}
+        if "error" not in stats_result:
+            stats = stats_result.get("metadata", {})
+
+        # Phân tích risk profile từ transaction history
+        total_profit = stats.get("totalProfit", 0)
+        win_rate = stats.get("winRate", 0.5)
+        total_transactions = stats.get("totalTransactions", 0)
+
+        # Xác định risk tolerance
+        # Conservative: balance < 50M hoặc win_rate < 0.4 hoặc total_transactions < 5
+        # Moderate: balance 50M-500M và win_rate 0.4-0.6
+        # Aggressive: balance > 500M hoặc win_rate > 0.6 và total_transactions > 10
+        if balance < 50000000 or win_rate < 0.4 or total_transactions < 5:
+            risk_profile = "conservative"
+        elif balance > 500000000 or (win_rate > 0.6 and total_transactions > 10):
+            risk_profile = "aggressive"
+        else:
+            risk_profile = "moderate"
+
+        # 3. Lấy top 20 mã cổ phiếu từ market data
+        market_result = get_market_data()
+        if "error" in market_result:
+            return {
+                "error": "Failed to get market data",
+                "message": market_result.get("message", "Unknown error"),
+            }
+
+        market_data = market_result.get("metadata", {})
+        stocks = market_data.get("stocks", [])
+
+        # Nếu không có stocks từ market data, lấy từ get_all_stocks
+        if not stocks:
+            all_stocks_result = get_all_stocks()
+            if "error" not in all_stocks_result:
+                stocks = all_stocks_result.get("metadata", {}).get("stocks", [])
+
+        # Sắp xếp stocks theo volume hoặc changePercent (top 20)
+        # Ưu tiên stocks có volume cao và changePercent tích cực
+        sorted_stocks = sorted(
+            stocks,
+            key=lambda x: (
+                x.get("volume", 0) * (1 + abs(x.get("changePercent", 0)) / 100)
+            ),
+            reverse=True,
+        )[:20]
+
+        # 4. Phân tích và gợi ý top 3
+        suggestions = []
+        for stock in sorted_stocks:
+            symbol = stock.get("symbol", "")
+            price = stock.get("price", 0)
+            change_percent = stock.get("changePercent", 0)
+            volume = stock.get("volume", 0)
+
+            if not symbol or price <= 0:
+                continue
+
+            # Tính điểm phù hợp dựa trên risk profile
+            score = 0.0
+            reasons = []
+
+            # Conservative: ưu tiên blue-chip, giá ổn định, volume cao
+            if risk_profile == "conservative":
+                # Blue-chip stocks (VCB, VIC, VHM, VNM, FPT, etc.)
+                blue_chips = ["VCB", "VIC", "VHM", "VNM", "FPT", "TCB", "BID", "CTG", "MBB"]
+                if symbol in blue_chips:
+                    score += 0.4
+                    reasons.append("Mã blue-chip ổn định")
+                
+                # Giá ổn định (changePercent không quá biến động)
+                if abs(change_percent) < 3:
+                    score += 0.2
+                    reasons.append("Giá ổn định")
+                
+                # Volume cao (thanh khoản tốt)
+                if volume > 1000000:
+                    score += 0.2
+                    reasons.append("Thanh khoản tốt")
+                
+                # Giá hợp lý (không quá cao)
+                if 50000 <= price <= 200000:
+                    score += 0.2
+                    reasons.append("Giá hợp lý")
+
+            # Moderate: cân bằng giữa blue-chip và growth stocks
+            elif risk_profile == "moderate":
+                blue_chips = ["VCB", "VIC", "VHM", "VNM", "FPT", "TCB", "BID", "CTG", "MBB", "MWG", "MSN", "HPG"]
+                if symbol in blue_chips:
+                    score += 0.3
+                    reasons.append("Mã blue-chip uy tín")
+                
+                # Tăng trưởng tích cực
+                if 0 < change_percent < 5:
+                    score += 0.3
+                    reasons.append("Xu hướng tăng trưởng tích cực")
+                
+                # Volume tốt
+                if volume > 500000:
+                    score += 0.2
+                    reasons.append("Thanh khoản tốt")
+                
+                # Giá phù hợp với balance
+                if balance > 0:
+                    affordable_quantity = balance / price
+                    if 10 <= affordable_quantity <= 1000:
+                        score += 0.2
+                        reasons.append("Phù hợp với số dư")
+
+            # Aggressive: ưu tiên growth stocks, biến động cao, tiềm năng tăng trưởng
+            else:  # aggressive
+                # Growth stocks hoặc mid-cap
+                growth_stocks = ["MWG", "MSN", "HPG", "DXG", "VRE", "VGC", "VSH", "GVR"]
+                if symbol in growth_stocks:
+                    score += 0.3
+                    reasons.append("Mã tăng trưởng tiềm năng")
+                
+                # Biến động tích cực
+                if change_percent > 2:
+                    score += 0.3
+                    reasons.append("Xu hướng tăng mạnh")
+                
+                # Volume cao (cơ hội giao dịch)
+                if volume > 2000000:
+                    score += 0.2
+                    reasons.append("Thanh khoản rất tốt")
+                
+                # Giá phù hợp để đầu tư lớn
+                if price < 300000:
+                    score += 0.2
+                    reasons.append("Giá hợp lý để đầu tư")
+
+            # Thêm thông tin stock vào suggestion
+            if score > 0:
+                suggestions.append({
+                    "symbol": symbol,
+                    "price": price,
+                    "changePercent": change_percent,
+                    "volume": volume,
+                    "score": round(score, 2),
+                    "reason": ", ".join(reasons) if reasons else "Phù hợp với profile",
+                })
+
+        # Sắp xếp theo score và lấy top 3
+        suggestions.sort(key=lambda x: x["score"], reverse=True)
+        top_3 = suggestions[:3]
+
+        if not top_3:
+            return {
+                "error": "No suitable stocks found",
+                "message": "Không tìm thấy cổ phiếu phù hợp với profile của bạn",
+                "suggestion": "Vui lòng thử lại sau hoặc điều chỉnh tiêu chí",
+            }
+
+        return {
+            "statusCode": 200,
+            "message": f"Đã phân tích và gợi ý {len(top_3)} mã cổ phiếu phù hợp",
+            "metadata": {
+                "userId": userId,
+                "userName": user_name,
+                "balance": balance,
+                "riskProfile": risk_profile,
+                "totalProfit": total_profit,
+                "winRate": win_rate,
+                "totalTransactions": total_transactions,
+                "suggestions": top_3,
+                "analysis": {
+                    "riskProfile": risk_profile,
+                    "reason": f"Dựa trên số dư {balance:,.0f} VNĐ, tỷ lệ thắng {win_rate*100:.1f}%, và {total_transactions} giao dịch",
+                },
+            },
+        }
+
+    except Exception as e:
+        return {
+            "error": "Unexpected error",
+            "message": str(e),
+            "suggestion": "Vui lòng thử lại sau",
+        }
