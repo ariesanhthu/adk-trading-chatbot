@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 import httpx
 
 # BASE_URL = "https://adk-trading-chatbot.onrender.com"
-BASE_URL = "http://0.0.0.0:8000"
+BASE_URL = "http://localhost:8002"  # Khớp với port được expose trong docker-compose
 HEALTH_ENDPOINT = f"{BASE_URL}/health"
 CHAT_ENDPOINT = f"{BASE_URL}/api/v1/chat"
 

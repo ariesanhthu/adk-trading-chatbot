@@ -14,6 +14,8 @@ services:
       # MCP Server config (optional, có default trong configs/mcp_config.yaml)
       - MCP_SERVER_URL=${MCP_SERVER_URL:-https://mcp-server-vietnam-stock-trading.onrender.com}
       - MCP_TIMEOUT=${MCP_TIMEOUT:-30}
+      # Port nội bộ cho Uvicorn (run_server.py đọc từ biến PORT)
+      - PORT=8002
       # FastAPI settings (JSON array format cho list[str])
       # Nếu không set, sẽ dùng default ["*"] từ config.py
       # Để override, set trong .env: BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]

@@ -46,6 +46,58 @@ class BuyStockData(BaseModel):
     steps: List[BuyFlowStep]
 
 
+class SellStockData(BaseModel):
+    symbol: str
+    currentPrice: float
+    availableQuantity: float  # Số lượng cổ phiếu user đang có
+    steps: List[BuyFlowStep]
+
+
+class TransactionData(BaseModel):
+    """Data for transaction confirmation"""
+
+    transactionId: Optional[str] = None
+    symbol: str
+    type: Literal["buy", "sell"]
+    quantity: float
+    price: float
+    totalAmount: float
+    userId: str
+
+
+class UserProfileData(BaseModel):
+    """Data for user profile display"""
+
+    userId: str
+    fullName: Optional[str] = None
+    email: Optional[str] = None
+    balance: Optional[float] = None
+    avatar: Optional[str] = None
+
+
+class TransactionHistoryData(BaseModel):
+    """Data for transaction history"""
+
+    userId: str
+    transactions: List[dict] = []
+
+
+class TransactionStatsData(BaseModel):
+    """Data for transaction statistics"""
+
+    userId: str
+    totalProfit: Optional[float] = None
+    totalTransactions: Optional[int] = None
+    winRate: Optional[float] = None
+
+
+class RankingData(BaseModel):
+    """Data for user ranking"""
+
+    rankings: List[dict] = []
+    userRank: Optional[int] = None
+
+
 class ShowMarketOverviewInstruction(BaseModel):
     type: Literal["SHOW_MARKET_OVERVIEW"] = "SHOW_MARKET_OVERVIEW"
 
@@ -53,6 +105,36 @@ class ShowMarketOverviewInstruction(BaseModel):
 class OpenBuyStockInstruction(BaseModel):
     type: Literal["OPEN_BUY_STOCK"] = "OPEN_BUY_STOCK"
     payload: BuyStockData
+
+
+class OpenSellStockInstruction(BaseModel):
+    type: Literal["OPEN_SELL_STOCK"] = "OPEN_SELL_STOCK"
+    payload: SellStockData
+
+
+class ConfirmTransactionInstruction(BaseModel):
+    type: Literal["CONFIRM_TRANSACTION"] = "CONFIRM_TRANSACTION"
+    payload: TransactionData
+
+
+class ShowUserProfileInstruction(BaseModel):
+    type: Literal["SHOW_USER_PROFILE"] = "SHOW_USER_PROFILE"
+    payload: UserProfileData
+
+
+class ShowTransactionHistoryInstruction(BaseModel):
+    type: Literal["SHOW_TRANSACTION_HISTORY"] = "SHOW_TRANSACTION_HISTORY"
+    payload: TransactionHistoryData
+
+
+class ShowTransactionStatsInstruction(BaseModel):
+    type: Literal["SHOW_TRANSACTION_STATS"] = "SHOW_TRANSACTION_STATS"
+    payload: TransactionStatsData
+
+
+class ShowRankingInstruction(BaseModel):
+    type: Literal["SHOW_RANKING"] = "SHOW_RANKING"
+    payload: RankingData
 
 
 class OpenNewsInstruction(BaseModel):
@@ -69,6 +151,12 @@ class OpenStockDetailInstruction(BaseModel):
 FeatureInstruction = (
     ShowMarketOverviewInstruction
     | OpenBuyStockInstruction
+    | OpenSellStockInstruction
     | OpenNewsInstruction
     | OpenStockDetailInstruction
+    | ConfirmTransactionInstruction
+    | ShowUserProfileInstruction
+    | ShowTransactionHistoryInstruction
+    | ShowTransactionStatsInstruction
+    | ShowRankingInstruction
 )

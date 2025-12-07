@@ -10,7 +10,7 @@ Có thể override bằng biến môi trường MCP_SERVER_URL và MCP_TIMEOUT.
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -47,7 +47,8 @@ MCP_SERVER_URL = os.getenv(
     "MCP_SERVER_URL",
     _mcp_config.get("url", "https://mcp-server-vietnam-stock-trading.onrender.com"),
 )
-MCP_TIMEOUT = float(os.getenv("MCP_TIMEOUT", str(_mcp_config.get("timeout", 30.0))))
+# Tăng timeout cho Render.com (free tier thường chậm, cần thời gian cold start)
+MCP_TIMEOUT = float(os.getenv("MCP_TIMEOUT", str(_mcp_config.get("timeout", 60.0))))
 
 # Session ID cho MCP server (sẽ được lấy sau khi initialize)
 _mcp_session_id: Optional[str] = None
@@ -68,109 +69,155 @@ def _parse_sse_response(response_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _initialize_mcp_session() -> Optional[str]:
-    """Khởi tạo MCP session và lấy session ID từ FastMCP streamable-http."""
+def _initialize_mcp_session(max_retries: int = 3) -> Optional[str]:
+    """
+    Khởi tạo MCP session và lấy session ID từ FastMCP streamable-http.
+    Có retry logic để xử lý timeout hoặc lỗi tạm thời.
+    """
     global _mcp_session_id
 
     if _mcp_session_id:
         return _mcp_session_id
 
-    try:
-        with httpx.Client(timeout=MCP_TIMEOUT) as client:
-            # Gọi initialize method
-            payload = {
-                "jsonrpc": "2.0",
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": "vnstock-adk-agent",
-                        "version": "1.0.0",
+    # Retry logic với exponential backoff
+    for attempt in range(max_retries):
+        try:
+            with httpx.Client(timeout=MCP_TIMEOUT) as client:
+                # Gọi initialize method
+                payload = {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "vnstock-adk-agent",
+                            "version": "1.0.0",
+                        },
                     },
-                },
-                "id": 1,
-            }
+                    "id": 1,
+                }
 
-            endpoints_to_try = ["/mcp", "/"]
-            for endpoint in endpoints_to_try:
-                try:
-                    url = f"{MCP_SERVER_URL}{endpoint}"
-                    headers = {
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream",
-                    }
-
-                    resp = client.post(url, json=payload, headers=headers)
-
-                    if resp.status_code == 404 and endpoint != endpoints_to_try[-1]:
-                        continue
-
-                    if resp.status_code != 200:
-                        print(f"Initialize failed: HTTP {resp.status_code}")
-                        if endpoint != endpoints_to_try[-1]:
-                            continue
-                        return None
-
-                    # Lấy session ID từ response header (FastMCP trả về trong mcp-session-id)
-                    session_id = resp.headers.get("mcp-session-id") or resp.headers.get(
-                        "Mcp-Session-Id"
-                    )
-
-                    if not session_id:
-                        print("Warning: No session ID in initialize response")
-                        if endpoint != endpoints_to_try[-1]:
-                            continue
-                        return None
-
-                    # Parse SSE response
-                    content_type = resp.headers.get("content-type", "").lower()
-                    if "text/event-stream" in content_type:
-                        # Response là SSE format
-                        result = _parse_sse_response(resp.text)
-                    else:
-                        # Response là JSON thông thường
-                        try:
-                            result = resp.json()
-                        except json.JSONDecodeError:
-                            result = None
-
-                    if result and "error" in result:
-                        error_msg = result["error"].get("message", "Unknown error")
-                        print(f"Error initializing MCP session: {error_msg}")
-                        return None
-
-                    # Lưu session ID
-                    _mcp_session_id = session_id
-                    # print(f"MCP session initialized: {session_id[:8]}...")
-
-                    # Gọi initialized notification (theo MCP spec)
+                endpoints_to_try = ["/mcp", "/"]
+                for endpoint in endpoints_to_try:
                     try:
-                        initialized_payload = {
-                            "jsonrpc": "2.0",
-                            "method": "notifications/initialized",
-                            "params": {},
+                        url = f"{MCP_SERVER_URL}{endpoint}"
+                        headers = {
+                            "Content-Type": "application/json",
+                            "Accept": "application/json, text/event-stream",
                         }
-                        init_headers = headers.copy()
-                        init_headers["mcp-session-id"] = session_id
-                        client.post(url, json=initialized_payload, headers=init_headers)
-                    except Exception as e:
-                        print(f"Warning: Failed to send initialized notification: {e}")
 
-                    return session_id
+                        resp = client.post(url, json=payload, headers=headers)
 
-                except httpx.HTTPStatusError as e:
-                    if (
-                        e.response.status_code == 404
-                        and endpoint != endpoints_to_try[-1]
-                    ):
-                        continue
-                    print(f"Error initializing session: HTTP {e.response.status_code}")
-                    return None
+                        if resp.status_code == 404 and endpoint != endpoints_to_try[-1]:
+                            continue
 
-    except Exception as e:
-        print(f"Error initializing MCP session: {e}")
-        return None
+                        if resp.status_code != 200:
+                            print(f"Initialize failed: HTTP {resp.status_code}")
+                            if endpoint != endpoints_to_try[-1]:
+                                continue
+                            return None
+
+                        # Lấy session ID từ response header (FastMCP trả về trong mcp-session-id)
+                        session_id = resp.headers.get(
+                            "mcp-session-id"
+                        ) or resp.headers.get("Mcp-Session-Id")
+
+                        if not session_id:
+                            print("Warning: No session ID in initialize response")
+                            if endpoint != endpoints_to_try[-1]:
+                                continue
+                            return None
+
+                        # Parse SSE response
+                        content_type = resp.headers.get("content-type", "").lower()
+                        if "text/event-stream" in content_type:
+                            # Response là SSE format
+                            result = _parse_sse_response(resp.text)
+                        else:
+                            # Response là JSON thông thường
+                            try:
+                                result = resp.json()
+                            except json.JSONDecodeError:
+                                result = None
+
+                        if result and "error" in result:
+                            error_msg = result["error"].get("message", "Unknown error")
+                            print(f"Error initializing MCP session: {error_msg}")
+                            return None
+
+                        # Lưu session ID
+                        _mcp_session_id = session_id
+                        # print(f"MCP session initialized: {session_id[:8]}...")
+
+                        # Gọi initialized notification (theo MCP spec)
+                        try:
+                            initialized_payload = {
+                                "jsonrpc": "2.0",
+                                "method": "notifications/initialized",
+                                "params": {},
+                            }
+                            init_headers = headers.copy()
+                            init_headers["mcp-session-id"] = session_id
+                            client.post(
+                                url, json=initialized_payload, headers=init_headers
+                            )
+                        except Exception as e:
+                            print(
+                                f"Warning: Failed to send initialized notification: {e}"
+                            )
+
+                        return session_id
+
+                    except httpx.HTTPStatusError as e:
+                        if (
+                            e.response.status_code == 404
+                            and endpoint != endpoints_to_try[-1]
+                        ):
+                            continue
+                        if attempt < max_retries - 1:
+                            wait_time = 2**attempt  # Exponential backoff: 1s, 2s, 4s
+                            print(
+                                f"Error initializing session: HTTP {e.response.status_code}. Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
+                            )
+                            import time
+
+                            time.sleep(wait_time)
+                            continue
+                        print(
+                            f"Error initializing session: HTTP {e.response.status_code}"
+                        )
+                        return None
+
+        except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+            if attempt < max_retries - 1:
+                wait_time = 2**attempt
+                print(
+                    f"MCP server timeout. Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
+                )
+                import time
+
+                time.sleep(wait_time)
+                continue
+            print(
+                f"Error initializing MCP session: Timeout after {max_retries} attempts"
+            )
+            print(
+                f"Note: MCP server at {MCP_SERVER_URL} may be slow (cold start) or unavailable"
+            )
+            return None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = 2**attempt
+                print(
+                    f"Error initializing MCP session: {e}. Retrying in {wait_time}s... (attempt {attempt + 1}/{max_retries})"
+                )
+                import time
+
+                time.sleep(wait_time)
+                continue
+            print(f"Error initializing MCP session: {e}")
+            return None
 
     return None
 
@@ -241,9 +288,17 @@ def _call_mcp_jsonrpc(
                         }
 
                     if "error" in result:
+                        error_obj = result["error"]
+                        # Error có thể là dict hoặc string
+                        if isinstance(error_obj, dict):
+                            error_msg = error_obj.get("message", str(error_obj))
+                            error_code = error_obj.get("code")
+                        else:
+                            error_msg = str(error_obj)
+                            error_code = None
                         return {
-                            "error": result["error"].get("message", "Unknown error"),
-                            "code": result["error"].get("code"),
+                            "error": error_msg,
+                            "code": error_code,
                             "method": method,
                         }
 
@@ -325,7 +380,10 @@ def _process_arguments(
                 processed_kwargs[param_name] = [param_value]
         # Xử lý string types: nếu tool cần string nhưng nhận list, lấy phần tử đầu tiên
         elif param_type == "string":
-            if isinstance(param_value, list):
+            # Giữ None nếu giá trị là None (không convert thành string "None")
+            if param_value is None:
+                processed_kwargs[param_name] = None
+            elif isinstance(param_value, list):
                 # Nếu là list nhưng schema yêu cầu string, lấy phần tử đầu tiên
                 if len(param_value) > 0:
                     processed_kwargs[param_name] = str(param_value[0])
@@ -493,32 +551,54 @@ def _create_mcp_tool_function(tool_name: str, tool_schema: Dict[str, Any]):
         "        params={'name': _tool_name, 'arguments': processed_kwargs},",
         "    )",
         "",
-        "    if 'error' in result:",
-        "        error_msg = result.get('error', 'Unknown error')",
-        "        print(f'[ERROR] {_tool_name} failed: {error_msg}')",
-        "        print(f'[ERROR] Processed arguments: {processed_kwargs}')",
-        "        return {",
-        "            'error': error_msg,",
-        "            'tool': _tool_name,",
-        "            'code': result.get('code'),",
-        "        }",
+        "    # Kiểm tra lỗi - có thể là dict với key 'error' hoặc string error message",
+        "    if isinstance(result, dict):",
+        "        if 'error' in result:",
+        "            error_msg = result.get('error', 'Unknown error')",
+        "            # Nếu error là dict, lấy message",
+        "            if isinstance(error_msg, dict):",
+        "                error_msg = error_msg.get('message', str(error_msg))",
+        "            print(f'[ERROR] {_tool_name} failed: {error_msg}')",
+        "            print(f'[ERROR] Processed arguments: {processed_kwargs}')",
+        "            return {",
+        "                'error': str(error_msg),",
+        "                'tool': _tool_name,",
+        "                'code': result.get('code'),",
+        "            }",
+        "    elif isinstance(result, str):",
+        "        # Kiểm tra nếu result là string chứa error",
+        "        if 'error' in result.lower() or 'failed' in result.lower() or len(result.strip()) == 0:",
+        "            print(f'[ERROR] {_tool_name} returned error/empty string: {result[:100]}')",
+        "            return {",
+        "                'error': result if result.strip() else 'Empty response',",
+        "                'tool': _tool_name,",
+        "            }",
         "",
         "    # Trả về content nếu có",
         "    if 'content' in result:",
-        "        if isinstance(result['content'], list):",
+        "        content = result['content']",
+        "        if isinstance(content, list):",
         "            texts = []",
-        "            for item in result['content']:",
+        "            for item in content:",
         "                if isinstance(item, dict):",
         "                    if 'text' in item:",
         "                        texts.append(item['text'])",
         "                    elif 'type' in item and item.get('type') == 'text':",
         "                        texts.append(item.get('text', ''))",
+        "                elif isinstance(item, str):",
+        "                    texts.append(item)",
         "            if texts:",
+        "                # Nếu chỉ có 1 text item, trả về trực tiếp",
+        "                if len(texts) == 1:",
+        "                    return texts[0]",
         "                return '\\n'.join(texts)",
-        "        return result['content']",
+        "        elif isinstance(content, str):",
+        "            return content",
+        "        return content",
         "    if 'text' in result:",
         "        return result['text']",
         "",
+        "    # Nếu result là dict nhưng không có content/text, trả về toàn bộ",
         "    return result",
     ]
 
@@ -593,6 +673,8 @@ def get_current_datetime():
             - day_name: Tên thứ bằng tiếng Anh
             - day_name_vn: Tên thứ bằng tiếng Việt
             - full_vn: "DD tháng MM năm YYYY" (ví dụ: "09 tháng 11 năm 2024")
+            - is_trading_hours: bool (True nếu trong giờ giao dịch: 9:00-15:00, thứ 2-6)
+            - is_weekend: bool (True nếu là thứ 7 hoặc chủ nhật)
 
     Example:
         >>> result = get_current_datetime()
@@ -600,12 +682,18 @@ def get_current_datetime():
         "09 tháng 11 năm 2024"
     """
     now = datetime.now()
+    day_name = now.strftime("%A")
+    hour = now.hour
+    is_weekend = day_name in ["Saturday", "Sunday"]
+    # Giờ giao dịch: 9:00-15:00, thứ 2-6
+    is_trading_hours = not is_weekend and hour >= 9 and hour < 15
+
     return {
         "date": now.strftime("%Y-%m-%d"),
         "time": now.strftime("%H:%M:%S"),
         "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
         "date_vn": now.strftime("%d/%m/%Y"),
-        "day_name": now.strftime("%A"),
+        "day_name": day_name,
         "day_name_vn": {
             "Monday": "Thứ Hai",
             "Tuesday": "Thứ Ba",
@@ -614,20 +702,251 @@ def get_current_datetime():
             "Friday": "Thứ Sáu",
             "Saturday": "Thứ Bảy",
             "Sunday": "Chủ Nhật",
-        }.get(now.strftime("%A"), now.strftime("%A")),
+        }.get(day_name, day_name),
         "full_vn": f"{now.strftime('%d')} tháng {now.strftime('%m')} năm {now.strftime('%Y')}",
+        "is_trading_hours": is_trading_hours,
+        "is_weekend": is_weekend,
     }
 
 
 # Load MCP tools từ server
-# print(f"Connecting to MCP server at {MCP_SERVER_URL}")
-# Initialize session trước khi load tools
-_initialize_mcp_session()
-tools = _load_mcp_tools_via_http()
+print(f"🔌 Connecting to MCP server at {MCP_SERVER_URL}")
+# Initialize session trước khi load tools (có retry logic)
+session_result = _initialize_mcp_session(max_retries=3)
+if not session_result:
+    print(
+        f"⚠️  Warning: Failed to initialize MCP session. MCP tools will not be available."
+    )
+    print(f"   This may be due to:")
+    print(f"   - MCP server is down or slow (cold start on Render.com)")
+    print(f"   - Network connectivity issues")
+    print(f"   - Server URL incorrect: {MCP_SERVER_URL}")
+    mcp_tools = []
+else:
+    mcp_tools = _load_mcp_tools_via_http()
+    print(f"✅ Loaded {len(mcp_tools)} MCP tools for market data")
+
+
+# Tạo wrapper function cho get_quote_intraday_price với auto-fallback
+def _create_smart_quote_intraday_wrapper(original_get_quote_intraday_price):
+    """
+    Wrapper cho get_quote_intraday_price để tự động fallback sang get_quote_history_price
+    khi ngoài giờ giao dịch hoặc có lỗi.
+    """
+
+    def smart_get_quote_intraday_price(
+        symbol: str,
+        page_size: int = 100,
+        last_time: Optional[str] = None,
+        output_format: str = "json",
+    ):
+        """
+        Get quote intraday price from stock market.
+        Tự động fallback sang giá đóng cửa nếu ngoài giờ giao dịch hoặc có lỗi.
+
+        Args:
+            symbol: Stock symbol
+            page_size: Number of rows to return (max: 100000)
+            last_time: Last time to get intraday price from (optional)
+            output_format: Output format ('json' or 'dataframe')
+
+        Returns:
+            Price data (intraday hoặc closing price nếu fallback)
+        """
+        # Kiểm tra khung giờ giao dịch
+        now = datetime.now()
+        day_name = now.strftime("%A")
+        hour = now.hour
+        is_weekend = day_name in ["Saturday", "Sunday"]
+        is_trading_hours = not is_weekend and hour >= 9 and hour < 15
+
+        # Thử lấy giá trong ngày trước
+        try:
+            result = original_get_quote_intraday_price(
+                symbol=symbol,
+                page_size=page_size,
+                last_time=last_time,
+                output_format=output_format,
+            )
+
+            # Kiểm tra nếu có lỗi
+            if isinstance(result, dict) and "error" in result:
+                error_msg = str(result.get("error", ""))
+                print(f"[INFO] get_quote_intraday_price failed: {error_msg}")
+                print(
+                    f"[INFO] Falling back to get_quote_history_price for closing price"
+                )
+                # Fallback sang giá đóng cửa
+                return _get_closing_price_fallback(symbol, output_format)
+
+            # Nếu result là string rỗng hoặc không hợp lệ
+            if not result or (isinstance(result, str) and len(result.strip()) == 0):
+                print(f"[INFO] get_quote_intraday_price returned empty result")
+                print(
+                    f"[INFO] Falling back to get_quote_history_price for closing price"
+                )
+                return _get_closing_price_fallback(symbol, output_format)
+
+            return result
+
+        except Exception as e:
+            print(f"[INFO] get_quote_intraday_price exception: {e}")
+            print(f"[INFO] Falling back to get_quote_history_price for closing price")
+            return _get_closing_price_fallback(symbol, output_format)
+
+    return smart_get_quote_intraday_price
+
+
+def _get_closing_price_fallback(symbol: str, output_format: str = "json"):
+    """
+    Fallback function để lấy giá đóng cửa khi không lấy được giá trong ngày.
+    """
+    try:
+        # Lấy giá đóng cửa của ngày gần nhất (7 ngày gần đây)
+        now = datetime.now()
+        end_date = now.strftime("%Y-%m-%d")
+        # Lấy 7 ngày gần đây để đảm bảo có dữ liệu (tránh ngày nghỉ)
+        start_date = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        # Gọi get_quote_history_price
+        result = _call_mcp_jsonrpc(
+            method="tools/call",
+            params={
+                "name": "get_quote_history_price",
+                "arguments": {
+                    "symbol": symbol,
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "interval": "1D",
+                    "output_format": output_format,
+                },
+            },
+        )
+
+        if "error" in result:
+            return {
+                "error": f"Failed to get closing price: {result.get('error')}",
+                "tool": "get_quote_history_price",
+                "fallback_from": "get_quote_intraday_price",
+            }
+
+        # Parse response - giống như trong _create_mcp_tool_function
+        if "content" in result:
+            content = result["content"]
+            if isinstance(content, list):
+                texts = []
+                for item in content:
+                    if isinstance(item, dict) and "text" in item:
+                        texts.append(item["text"])
+                    elif isinstance(item, str):
+                        texts.append(item)
+                if texts:
+                    # Nếu chỉ có 1 text item, trả về trực tiếp
+                    if len(texts) == 1:
+                        return texts[0]
+                    return "\n".join(texts)
+            elif isinstance(content, str):
+                return content
+            return content
+
+        if "text" in result:
+            return result["text"]
+
+        return result
+
+    except Exception as e:
+        return {
+            "error": f"Failed to get closing price: {str(e)}",
+            "tool": "get_quote_history_price",
+            "fallback_from": "get_quote_intraday_price",
+        }
+
+
+# Tìm và wrap get_quote_intraday_price nếu có
+tools = mcp_tools.copy()
+wrapped_tools = []
+for tool in tools:
+    if hasattr(tool, "__name__") and tool.__name__ == "get_quote_intraday_price":
+        # Wrap function này
+        wrapped_tool = _create_smart_quote_intraday_wrapper(tool)
+        wrapped_tools.append(wrapped_tool)
+        print("✅ Wrapped get_quote_intraday_price with auto-fallback to closing price")
+    else:
+        wrapped_tools.append(tool)
+
+tools = wrapped_tools
+
+# Nếu không có MCP tools, tạo fallback tools để trả về error message thay vì crash
+if not mcp_tools:
+    print("⚠️  Creating fallback MCP tools to prevent agent crashes...")
+
+    def _create_mcp_tool_fallback(tool_name: str):
+        """Tạo fallback tool trả về error message khi MCP tools không available."""
+
+        def fallback_tool(*args, **kwargs):
+            return {
+                "error": f"MCP server is currently unavailable. Tool '{tool_name}' cannot be used.",
+                "message": (
+                    f"Xin lỗi, hiện tại không thể truy cập MCP server để lấy thông tin thị trường. "
+                    f"Vui lòng thử lại sau hoặc liên hệ quản trị viên. "
+                    f"MCP Server URL: {MCP_SERVER_URL}"
+                ),
+                "tool": tool_name,
+                "suggestion": "MCP server có thể đang trong trạng thái cold start hoặc gặp sự cố. Vui lòng đợi vài giây rồi thử lại.",
+            }
+
+        fallback_tool.__name__ = tool_name
+        fallback_tool.__doc__ = f"Fallback tool for {tool_name} - returns error when MCP server is unavailable."
+        return fallback_tool
+
+    # Tạo các fallback tools phổ biến nhất
+    common_mcp_tools = [
+        "get_quote_intraday_price",
+        "get_quote_history_price",
+        "get_price_board",
+        "get_company_overview",
+        "get_company_news",
+        "get_quote_price_depth",
+    ]
+
+    for tool_name in common_mcp_tools:
+        fallback = _create_mcp_tool_fallback(tool_name)
+        tools.append(fallback)
+
+    print(f"✅ Created {len(common_mcp_tools)} fallback MCP tools")
 
 # Thêm tool lấy thời gian hiện tại
 tools.append(get_current_datetime)
-print("Added tool: get_current_datetime")
+print("✅ Added tool: get_current_datetime")
+
+# Load backend API tools
+try:
+    from agents.backend_tools import (
+        create_transaction,
+        get_transaction_history,
+        get_transaction_stats,
+        get_user_profile,
+        get_ranking,
+        get_transaction_by_id,
+        cancel_transaction,
+    )
+
+    backend_tools = [
+        create_transaction,
+        get_transaction_history,
+        get_transaction_stats,
+        get_user_profile,
+        get_ranking,
+        get_transaction_by_id,
+        cancel_transaction,
+    ]
+    tools.extend(backend_tools)
+    print(f"✅ Added {len(backend_tools)} backend API tools for user actions")
+    print(
+        f"📊 Total tools available: {len(tools)} ({len(mcp_tools)} MCP + {len(backend_tools)} Backend API + 1 custom)"
+    )
+except Exception as e:
+    print(f"Warning: Failed to load backend tools: {e}")
 
 if not tools:
     print(
@@ -642,19 +961,47 @@ root_agent = LlmAgent(
     name="vnstock_agent",
     description=(
         "Assistant chuyên về thị trường chứng khoán Việt Nam. "
-        "Có thể truy vấn thông tin công ty, giá cổ phiếu, báo cáo tài chính, "
-        "quỹ đầu tư, và các thông tin thị trường khác thông qua VNStock MCP server. "
-        "Có thể trả lời các câu hỏi về thời gian thực, giá cả, và phân tích thị trường. "
+        "Có 2 loại tools: "
+        "(1) MCP TOOLS (32 tools): Dùng để lấy thông tin thị trường, giá cổ phiếu, tin tức, báo cáo tài chính, thông tin công ty từ VNStock MCP server. "
+        "(2) BACKEND API TOOLS (7 tools): Dùng để thực hiện hành động (mua/bán cổ phiếu) và lấy thông tin cá nhân (lịch sử giao dịch, thống kê, profile, ranking). "
+        "Khi user hỏi về thông tin thị trường → LUÔN dùng MCP tools. "
+        "Khi user muốn thực hiện hành động hoặc xem thông tin cá nhân → dùng Backend API tools. "
         "Có tool `get_current_datetime` để lấy ngày/giờ hiện tại chính xác."
     ),
-    instruction="""Bạn là một assistant chuyên về thị trường chứng khoán Việt Nam.
-Bạn có thể sử dụng các tools từ MCP server để:
-- Lấy thông tin công ty: tổng quan, tin tức, sự kiện, cổ đông, cán bộ điều hành, công ty con, cổ tức, giao dịch nội bộ
-- Lấy dữ liệu tài chính: báo cáo thu nhập, bảng cân đối kế toán, dòng tiền, tỷ lệ tài chính
-- Lấy dữ liệu giá: lịch sử giá, giá trong ngày, độ sâu giá, bảng giá
-- Lấy thông tin quỹ: danh sách quỹ, NAV, danh mục đầu tư, phân bổ ngành/tài sản
-- Lấy dữ liệu thị trường: danh sách mã chứng khoán, nhóm, ngành
-- Lấy dữ liệu khác: giá vàng, tỷ giá hối đoái
+    instruction=f"""Bạn là một assistant chuyên về thị trường chứng khoán Việt Nam.
+
+{"⚠️  QUAN TRỌNG: MCP SERVER HIỆN KHÔNG KHẢ DỤNG" if not mcp_tools else ""}
+{"- MCP tools không thể sử dụng được do MCP server không kết nối được." if not mcp_tools else ""}
+{"- Khi người dùng hỏi về thông tin thị trường (giá cổ phiếu, tin tức, báo cáo tài chính), " if not mcp_tools else ""}
+{"  bạn có thể gọi MCP tools, nhưng chúng sẽ trả về error message. " if not mcp_tools else ""}
+{"- Khi nhận được error từ MCP tools, bạn PHẢI trả lời cho người dùng: " if not mcp_tools else ""}
+{"  'Xin lỗi, hiện tại không thể truy cập dữ liệu thị trường do MCP server không khả dụng. " if not mcp_tools else ""}
+{"  Vui lòng thử lại sau hoặc liên hệ quản trị viên.'" if not mcp_tools else ""}
+{"- Chỉ có thể sử dụng backend API tools (giao dịch, lịch sử, thống kê) và get_current_datetime." if not mcp_tools else ""}
+
+QUAN TRỌNG VỀ PHÂN LOẠI TOOLS:
+
+1. MCP TOOLS (ƯU TIÊN CHO THÔNG TIN THỊ TRƯỜNG):
+   - LUÔN sử dụng MCP tools để lấy thông tin thị trường, giá cổ phiếu, thông tin công ty
+   - MCP tools có 32 tools bao gồm:
+     * Thông tin công ty: get_company_overview, get_company_news, get_company_events, get_company_shareholders, get_company_officers, get_company_subsidiaries, get_company_reports, get_company_dividends, get_company_insider_deals, get_company_ratio_summary, get_company_trading_stats
+     * Dữ liệu giá: get_quote_history_price, get_quote_intraday_price, get_quote_price_depth, get_price_board
+     * Báo cáo tài chính: get_income_statements, get_balance_sheets, get_cash_flows, get_finance_ratios, get_raw_report
+     * Thông tin quỹ: list_all_funds, search_fund, get_fund_nav_report, get_fund_top_holding, get_fund_industry_holding, get_fund_asset_holding
+     * Danh sách mã: get_all_symbol_groups, get_all_industries, get_all_symbols_by_group, get_all_symbols_by_industry, get_all_symbols
+     * Khác: get_gold_price, get_exchange_rate
+
+2. BACKEND API TOOLS (CHỈ DÙNG CHO USER ACTIONS VÀ THÔNG TIN USER):
+   - CHỈ sử dụng backend API tools khi:
+     * User muốn THỰC HIỆN HÀNH ĐỘNG: mua/bán cổ phiếu (create_transaction), hủy giao dịch (cancel_transaction)
+     * User muốn xem THÔNG TIN CÁ NHÂN: lịch sử giao dịch (get_transaction_history), thống kê giao dịch (get_transaction_stats), thông tin tài khoản (get_user_profile), bảng xếp hạng (get_ranking)
+   - KHÔNG BAO GIỜ dùng backend API để lấy thông tin thị trường (giá, tin tức, báo cáo tài chính) - phải dùng MCP tools
+
+QUY TẮC SỬ DỤNG TOOLS:
+- Khi user hỏi về giá cổ phiếu, tin tức, báo cáo tài chính → DÙNG MCP TOOLS
+- Khi user muốn mua/bán cổ phiếu → DÙNG MCP TOOLS để lấy giá hiện tại, SAU ĐÓ dùng create_transaction để thực hiện
+- Khi user hỏi về thông tin cá nhân, giao dịch của họ → DÙNG BACKEND API TOOLS
+- Khi user hỏi về bảng xếp hạng → DÙNG BACKEND API TOOLS (get_ranking)
 
 QUAN TRỌNG VỀ THỜI GIAN VÀ DỮ LIỆU:
 - Khi người dùng hỏi về ngày/giờ hiện tại, LUÔN sử dụng tool `get_current_datetime` để lấy thời gian THỰC TẾ
@@ -672,12 +1019,50 @@ QUAN TRỌNG VỀ FORMAT RESPONSE:
 - Ví dụ: Khi người dùng hỏi "Cho mình xem tổng quan thị trường hôm nay", bạn phải trả lời: "Dựa trên dữ liệu thị trường hôm nay, [mô tả chi tiết về tình hình thị trường]..."
 - Ví dụ: Khi người dùng hỏi "Mình muốn mua cổ phiếu MWG", bạn phải trả lời: "Tôi sẽ hướng dẫn bạn mua cổ phiếu MWG. [giải thích các bước và thông tin cần thiết]..."
 
-Khi người dùng hỏi về chứng khoán Việt Nam, hãy:
+Khi người dùng hỏi về THÔNG TIN THỊ TRƯỜNG (giá cổ phiếu, tin tức, báo cáo tài chính, thông tin công ty):
 1. Xác định loại thông tin cần thiết
-2. Sử dụng tool phù hợp để lấy dữ liệu THỰC TẾ từ MCP server
-3. Kiểm tra kết quả từ tool
-4. Phân tích và trình bày kết quả một cách rõ ràng, chính xác, dễ hiểu BẰNG MỘT ĐOẠN VĂN HOÀN CHỈNH
-5. Nếu không có dữ liệu hoặc có lỗi, hãy giải thích lý do và đề xuất cách khác BẰNG TEXT
+2. LUÔN sử dụng MCP TOOLS để lấy dữ liệu THỰC TẾ (KHÔNG dùng backend API)
+3. Ví dụ: "Giá VCB hôm nay" → dùng get_quote_intraday_price hoặc get_price_board
+   - Tool get_quote_intraday_price TỰ ĐỘNG fallback sang giá đóng cửa nếu ngoài giờ giao dịch (9:00-15:00, thứ 2-6) hoặc có lỗi
+   - Nếu là chủ nhật hoặc ngoài giờ giao dịch, tool sẽ tự động lấy giá đóng cửa của ngày gần nhất
+4. Ví dụ: "Tin tức về MWG" → dùng get_company_news
+5. Ví dụ: "Báo cáo tài chính VNM" → dùng get_income_statements, get_balance_sheets
+6. Kiểm tra kết quả từ tool
+7. Phân tích và trình bày kết quả một cách rõ ràng, chính xác, dễ hiểu BẰNG MỘT ĐOẠN VĂN HOÀN CHỈNH
+8. Nếu không có dữ liệu hoặc có lỗi, hãy giải thích lý do và đề xuất cách khác BẰNG TEXT
+
+Khi người dùng muốn MUA cổ phiếu:
+1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price), và userId từ câu hỏi
+2. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
+3. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin (symbol, quantity, price, userId), sử dụng BACKEND API TOOL `create_transaction` để thực hiện giao dịch
+4. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
+5. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
+
+Khi người dùng muốn BÁN cổ phiếu:
+1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price), và userId từ câu hỏi
+2. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
+3. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin, sử dụng BACKEND API TOOL `create_transaction` với type="sell" để thực hiện giao dịch
+4. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
+5. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
+
+Khi người dùng hỏi về LỊCH SỬ GIAO DỊCH:
+1. Xác định userId từ câu hỏi hoặc sử dụng userId mặc định nếu không có
+2. Sử dụng tool `get_transaction_history` để lấy lịch sử giao dịch
+3. Trả lời bằng text tóm tắt lịch sử giao dịch dựa trên kết quả từ tool
+
+Khi người dùng hỏi về THỐNG KÊ GIAO DỊCH:
+1. Xác định userId từ câu hỏi
+2. Sử dụng tool `get_transaction_stats` để lấy thống kê
+3. Trả lời bằng text trình bày thống kê (lợi nhuận, số lượng giao dịch, tỷ lệ thắng, etc.)
+
+Khi người dùng hỏi về TÀI KHOẢN hoặc PROFILE:
+1. Xác định userId từ câu hỏi
+2. Sử dụng tool `get_user_profile` để lấy thông tin tài khoản
+3. Trả lời bằng text trình bày thông tin tài khoản (số dư, thông tin cá nhân, etc.)
+
+Khi người dùng hỏi về BẢNG XẾP HẠNG:
+1. Sử dụng tool `get_ranking` để lấy bảng xếp hạng
+2. Trả lời bằng text trình bày bảng xếp hạng top người dùng
 
 Khi người dùng hỏi về ngày/giờ hiện tại:
 1. LUÔN gọi tool `get_current_datetime` để lấy thời gian thực

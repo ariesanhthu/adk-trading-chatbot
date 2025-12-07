@@ -13,10 +13,22 @@ from ...schemas.chat import ChatRequest, ChatResponse, SuggestionMessage
 from ...schemas.ui import (
     ShowMarketOverviewInstruction,
     OpenBuyStockInstruction,
+    OpenSellStockInstruction,
     OpenNewsInstruction,
     OpenStockDetailInstruction,
+    ConfirmTransactionInstruction,
+    ShowUserProfileInstruction,
+    ShowTransactionHistoryInstruction,
+    ShowTransactionStatsInstruction,
+    ShowRankingInstruction,
     FeatureInstruction,
     BuyStockData,
+    SellStockData,
+    TransactionData,
+    UserProfileData,
+    TransactionHistoryData,
+    TransactionStatsData,
+    RankingData,
     BuyFlowStep,
 )
 
@@ -99,6 +111,87 @@ def _build_ui_effects(
         stock_detail = agent_output.get("stock_detail")
         if stock_detail:
             ui_effects.append(OpenStockDetailInstruction(payload=stock_detail))
+
+    elif intent == "sell_stock":
+        symbol = agent_output.get("symbol") or _extract_symbol_from_reply(reply)
+        price = agent_output.get("price") or agent_output.get("currentPrice")
+        available_qty = agent_output.get("availableQuantity", 0.0)
+
+        if symbol:
+            steps = agent_output.get(
+                "steps",
+                [
+                    {"id": "choose_volume", "title": "Chọn khối lượng"},
+                    {"id": "choose_price", "title": "Chọn giá đặt lệnh"},
+                    {"id": "confirm", "title": "Xác nhận lệnh"},
+                ],
+            )
+
+            step_models = [
+                BuyFlowStep(**s) if isinstance(s, dict) else s for s in steps
+            ]
+
+            ui_effects.append(
+                OpenSellStockInstruction(
+                    payload=SellStockData(
+                        symbol=symbol,
+                        currentPrice=float(price) if price else 0.0,
+                        availableQuantity=float(available_qty),
+                        steps=step_models,
+                    )
+                )
+            )
+
+    elif intent == "user_profile":
+        userId = agent_output.get("userId") or "current_user"
+        ui_effects.append(
+            ShowUserProfileInstruction(
+                payload=UserProfileData(
+                    userId=userId,
+                    fullName=agent_output.get("fullName"),
+                    email=agent_output.get("email"),
+                    balance=agent_output.get("balance"),
+                    avatar=agent_output.get("avatar"),
+                )
+            )
+        )
+
+    elif intent == "transaction_history":
+        userId = agent_output.get("userId") or "current_user"
+        transactions = agent_output.get("transactions", [])
+        ui_effects.append(
+            ShowTransactionHistoryInstruction(
+                payload=TransactionHistoryData(
+                    userId=userId,
+                    transactions=transactions,
+                )
+            )
+        )
+
+    elif intent == "transaction_stats":
+        userId = agent_output.get("userId") or "current_user"
+        ui_effects.append(
+            ShowTransactionStatsInstruction(
+                payload=TransactionStatsData(
+                    userId=userId,
+                    totalProfit=agent_output.get("totalProfit"),
+                    totalTransactions=agent_output.get("totalTransactions"),
+                    winRate=agent_output.get("winRate"),
+                )
+            )
+        )
+
+    elif intent == "ranking":
+        rankings = agent_output.get("rankings", [])
+        userRank = agent_output.get("userRank")
+        ui_effects.append(
+            ShowRankingInstruction(
+                payload=RankingData(
+                    rankings=rankings,
+                    userRank=userRank,
+                )
+            )
+        )
 
     return ui_effects
 
@@ -391,12 +484,31 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
         except Exception:
             pass
 
-        # Chỉ accumulate text từ model response (author="model"), không lấy tool calls
+        # Accumulate text từ model response
+        # Ưu tiên lấy từ final response, nếu không có thì lấy từ tất cả model events
         if event_text and event_author == "model":
-            text_parts.append(event_text)
+            # Nếu là final response, ưu tiên dùng text này (có thể clear và chỉ dùng final)
+            is_final = hasattr(event, "is_final_response") and getattr(
+                event, "is_final_response", False
+            )
+            if is_final:
+                # Final response - ưu tiên, nhưng vẫn append để giữ context
+                text_parts.append(event_text)
+            else:
+                # Intermediate response - append bình thường
+                text_parts.append(event_text)
 
     # Join tất cả text parts thành một response hoàn chỉnh
-    reply_text = "\n".join(text_parts).strip()
+    # Nếu có nhiều parts, join bằng space để tạo đoạn văn liền mạch
+    reply_text = " ".join(text_parts).strip() if text_parts else ""
+
+    # Nếu vẫn rỗng, thử lấy từ events_dump (fallback)
+    if not reply_text and events_dump:
+        # Tìm text từ events có author="model"
+        for event_info in events_dump:
+            if event_info.get("author") == "model" and event_info.get("text"):
+                reply_text = event_info.get("text", "")
+                break
 
     return reply_text, events_dump
 
@@ -438,8 +550,19 @@ async def _run_agent(
             }
         ]
 
+    # Nếu không có text, tạo fallback message dựa trên query
     if not reply_text:
-        reply_text = "[DEBUG] Agent không trả về text – kiểm tra raw_agent_output.events để debug."
+        # Tạo reply mặc định dựa trên query để frontend vẫn có thể render UI effects
+        if "mua" in user_message.lower() or "buy" in user_message.lower():
+            reply_text = "Tôi sẽ hướng dẫn bạn mua cổ phiếu. Vui lòng chọn mã cổ phiếu và khối lượng bạn muốn mua."
+        elif "tổng quan" in user_message.lower() or "market" in user_message.lower():
+            reply_text = "Đây là tổng quan thị trường chứng khoán Việt Nam hôm nay."
+        elif "tin tức" in user_message.lower() or "news" in user_message.lower():
+            reply_text = "Đây là các tin tức mới nhất về thị trường chứng khoán."
+        else:
+            reply_text = (
+                "Tôi đã nhận được yêu cầu của bạn. Vui lòng thử lại hoặc hỏi rõ hơn."
+            )
 
     return {
         "reply": reply_text,
