@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 import yaml
 from google.adk.agents import LlmAgent
+from google.adk.models.lite_llm import LiteLlm
 from dotenv import load_dotenv
 
 # Load biến môi trường (GOOGLE_API_KEY, v.v.) từ .env nếu có
@@ -929,6 +930,10 @@ try:
         get_ranking,
         get_transaction_by_id,
         cancel_transaction,
+        get_market_data,
+        get_stock_data,
+        get_all_stocks,
+        get_vn30_history,
     )
 
     backend_tools = [
@@ -939,9 +944,15 @@ try:
         get_ranking,
         get_transaction_by_id,
         cancel_transaction,
+        get_market_data,
+        get_stock_data,
+        get_all_stocks,
+        get_vn30_history,
     ]
     tools.extend(backend_tools)
-    print(f"✅ Added {len(backend_tools)} backend API tools for user actions")
+    print(
+        f"✅ Added {len(backend_tools)} backend API tools (user actions + market cache)"
+    )
     print(
         f"📊 Total tools available: {len(tools)} ({len(mcp_tools)} MCP + {len(backend_tools)} Backend API + 1 custom)"
     )
@@ -954,10 +965,37 @@ if not tools:
         f"Ensure MCP server is running at {MCP_SERVER_URL}"
     )
 
-# Tạo agent với MCP tools - sử dụng Google Gemini
-# API key: set GOOGLE_API_KEY trong .env
+# Tạo agent với MCP tools - sử dụng OpenRouter API
+# API key: set OPENROUTER_API_KEY trong .env
+openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+if not openrouter_api_key:
+    print("⚠️  WARNING: OPENROUTER_API_KEY not found in environment variables!")
+    print("   Please set OPENROUTER_API_KEY in .env file")
+else:
+    print(f"✅ OPENROUTER_API_KEY found: {openrouter_api_key[:10]}...")
+
+# Set biến môi trường cho litellm (litellm tự động đọc từ env)
+os.environ["OPENROUTER_API_KEY"] = openrouter_api_key or ""
+
+# Cấu hình OpenRouter với LiteLlm
+# Format model name: openrouter/provider/model hoặc provider/model
+# Thử model khác nếu gpt-oss-120b:free không hoạt động
+# Các model free tier phổ biến: meta-llama/llama-3.2-3b-instruct:free, google/gemini-flash-1.5:free
+model_name = os.getenv("OPENROUTER_MODEL", "openrouter/openai/gpt-oss-120b:free")
+print(f"🔧 Using OpenRouter model: {model_name}")
+
 root_agent = LlmAgent(
-    model="gemini-2.5-flash",  # Google Gemini model
+    model=LiteLlm(
+        model=model_name,
+        api_key=openrouter_api_key,
+        api_base="https://openrouter.ai/api/v1",
+        timeout=180.0,  # Timeout 180 giây cho model free tier có thể chậm
+        # Thêm headers cho OpenRouter (optional)
+        extra_headers={
+            "HTTP-Referer": "https://github.com/ai-core-trading",
+            "X-Title": "VNStock Agent",
+        },
+    ),
     name="vnstock_agent",
     description=(
         "Assistant chuyên về thị trường chứng khoán Việt Nam. "
@@ -991,11 +1029,14 @@ QUAN TRỌNG VỀ PHÂN LOẠI TOOLS:
      * Danh sách mã: get_all_symbol_groups, get_all_industries, get_all_symbols_by_group, get_all_symbols_by_industry, get_all_symbols
      * Khác: get_gold_price, get_exchange_rate
 
-2. BACKEND API TOOLS (CHỈ DÙNG CHO USER ACTIONS VÀ THÔNG TIN USER):
-   - CHỈ sử dụng backend API tools khi:
+2. BACKEND API TOOLS (CHỈ DÙNG NẾU THIẾU THÔNG TIN, THỰC HIỆN USER ACTIONS, THÔNG TIN USER VÀ MARKET CACHE):
+   - Sử dụng backend API tools khi:
+     * THIẾU THÔNG TIN VỀ HỆ THỐNG
      * User muốn THỰC HIỆN HÀNH ĐỘNG: mua/bán cổ phiếu (create_transaction), hủy giao dịch (cancel_transaction)
      * User muốn xem THÔNG TIN CÁ NHÂN: lịch sử giao dịch (get_transaction_history), thống kê giao dịch (get_transaction_stats), thông tin tài khoản (get_user_profile), bảng xếp hạng (get_ranking)
-   - KHÔNG BAO GIỜ dùng backend API để lấy thông tin thị trường (giá, tin tức, báo cáo tài chính) - phải dùng MCP tools
+     * User muốn xem MARKET CACHE (dữ liệu đã cache): get_market_data, get_stock_data, get_all_stocks, get_vn30_history
+   - LƯU Ý: userId sẽ được tự động lấy từ metadata, không cần user cung cấp trong message
+   - KHÔNG BAO GIỜ dùng backend API để lấy thông tin thị trường real-time (giá, tin tức, báo cáo tài chính) - phải dùng MCP tools
 
 QUY TẮC SỬ DỤNG TOOLS:
 - Khi user hỏi về giá cổ phiếu, tin tức, báo cáo tài chính → DÙNG MCP TOOLS
@@ -1031,33 +1072,66 @@ Khi người dùng hỏi về THÔNG TIN THỊ TRƯỜNG (giá cổ phiếu, tin
 7. Phân tích và trình bày kết quả một cách rõ ràng, chính xác, dễ hiểu BẰNG MỘT ĐOẠN VĂN HOÀN CHỈNH
 8. Nếu không có dữ liệu hoặc có lỗi, hãy giải thích lý do và đề xuất cách khác BẰNG TEXT
 
+QUAN TRỌNG VỀ XỬ LÝ CÂU HỎI KHÔNG RÕ RÀNG - HIỂN THỊ MẶC ĐỊNH:
+- Khi người dùng hỏi về "tin tức thị trường", "diễn biến thị trường", "tình hình thị trường", "thị trường hôm nay" mà KHÔNG chỉ định mã cụ thể:
+  → MẶC ĐỊNH: Sử dụng `get_all_symbols_by_group` với group="VN30" để lấy danh sách mã VN30
+  → Nếu thành công: Sử dụng `get_price_board` với danh sách mã VN30 vừa lấy được
+  → Nếu thất bại: Sử dụng `get_price_board` với danh sách mã phổ biến mặc định: ["VCB", "VIC", "VHM", "HPG", "MSN", "MWG", "FPT", "VNM", "TCB", "BID", "CTG", "MBB", "VPB", "TPB", "ACB", "STB", "HDB", "SSI", "VCI", "GAS", "PLX", "POW", "GVR", "VSH", "VGC", "DXG", "VRE", "VHC", "VND", "VJC"]
+  → HIỂN THỊ kết quả bảng giá (diễn biến thị trường) ngay lập tức
+  → SAU ĐÓ hỏi: "Bạn có muốn xem tin tức về mã cụ thể nào không? Hoặc muốn xem giá của mã khác?"
+
+- Khi người dùng hỏi về "tin tức về công ty", "tin tức công ty", "news công ty" mà KHÔNG chỉ định mã cụ thể:
+  → MẶC ĐỊNH: Giả định người dùng muốn xem tin tức kinh doanh/tài chính
+  → HỎI LẠI: "Bạn muốn xem tin tức về công ty nào? Vui lòng cung cấp mã cổ phiếu (ví dụ: VCB, VNM, FPT, ...)"
+  → SAU KHI CÓ MÃ: Sử dụng `get_company_news` với symbol được cung cấp, page_size=10 (mặc định), page=0 (mặc định)
+
+- Khi người dùng hỏi về "tin tức về [MÃ]" (ví dụ: "tin tức về VCB"):
+  → Sử dụng `get_company_news` với symbol cụ thể, page_size=10, page=0
+  → HIỂN THỊ kết quả ngay lập tức
+
+- Khi người dùng hỏi về "giá cổ phiếu", "bảng giá" mà KHÔNG chỉ định mã cụ thể:
+  → MẶC ĐỊNH: Sử dụng `get_price_board` với danh sách mã VN30 (như trên)
+  → HIỂN THỊ kết quả ngay lập tức
+  → SAU ĐÓ hỏi: "Bạn có muốn xem giá của mã cụ thể nào khác không?"
+
+- Khi người dùng hỏi về "báo cáo tài chính", "báo cáo" mà KHÔNG chỉ định mã cụ thể:
+  → HỎI LẠI: "Bạn muốn xem báo cáo tài chính của công ty nào? Vui lòng cung cấp mã cổ phiếu (ví dụ: VCB, VNM, FPT, ...)"
+  → SAU KHI CÓ MÃ: Sử dụng `get_income_statements`, `get_balance_sheets`, `get_cash_flows` với symbol được cung cấp
+
+NGUYÊN TẮC CHUNG:
+- LUÔN hiển thị output mặc định TRƯỚC (nếu có thể suy luận được)
+- SAU ĐÓ mới hỏi lại thông tin cần thiết nếu thiếu hoặc muốn chi tiết hơn
+- Nếu không thể suy luận được (ví dụ: thiếu mã cổ phiếu cho get_company_news), hỏi lại ngay nhưng vẫn cung cấp context về những gì sẽ hiển thị
+
 Khi người dùng muốn MUA cổ phiếu:
-1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price), và userId từ câu hỏi
-2. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
-3. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin (symbol, quantity, price, userId), sử dụng BACKEND API TOOL `create_transaction` để thực hiện giao dịch
-4. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
-5. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
+1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price) từ câu hỏi
+2. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+3. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
+4. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin (symbol, quantity, price), sử dụng BACKEND API TOOL `create_transaction` để thực hiện giao dịch (userId sẽ tự động được lấy)
+5. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
+6. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
 
 Khi người dùng muốn BÁN cổ phiếu:
-1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price), và userId từ câu hỏi
-2. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
-3. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin, sử dụng BACKEND API TOOL `create_transaction` với type="sell" để thực hiện giao dịch
-4. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
-5. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
+1. Xác định mã cổ phiếu (symbol), khối lượng (quantity), giá (price) từ câu hỏi
+2. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+3. BƯỚC 1: LUÔN lấy giá hiện tại bằng MCP TOOL (get_quote_intraday_price hoặc get_price_board) - KHÔNG dùng backend API
+4. BƯỚC 2: Nếu người dùng đã cung cấp đủ thông tin, sử dụng BACKEND API TOOL `create_transaction` với type="sell" để thực hiện giao dịch (userId sẽ tự động được lấy)
+5. Nếu thiếu thông tin, hướng dẫn người dùng cung cấp đầy đủ thông tin cần thiết
+6. Trả lời bằng text rõ ràng về kết quả giao dịch hoặc hướng dẫn tiếp theo
 
 Khi người dùng hỏi về LỊCH SỬ GIAO DỊCH:
-1. Xác định userId từ câu hỏi hoặc sử dụng userId mặc định nếu không có
-2. Sử dụng tool `get_transaction_history` để lấy lịch sử giao dịch
+1. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+2. Sử dụng tool `get_transaction_history` để lấy lịch sử giao dịch (không cần truyền userId, tool sẽ tự động lấy)
 3. Trả lời bằng text tóm tắt lịch sử giao dịch dựa trên kết quả từ tool
 
 Khi người dùng hỏi về THỐNG KÊ GIAO DỊCH:
-1. Xác định userId từ câu hỏi
-2. Sử dụng tool `get_transaction_stats` để lấy thống kê
+1. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+2. Sử dụng tool `get_transaction_stats` để lấy thống kê (không cần truyền userId, tool sẽ tự động lấy)
 3. Trả lời bằng text trình bày thống kê (lợi nhuận, số lượng giao dịch, tỷ lệ thắng, etc.)
 
 Khi người dùng hỏi về TÀI KHOẢN hoặc PROFILE:
-1. Xác định userId từ câu hỏi
-2. Sử dụng tool `get_user_profile` để lấy thông tin tài khoản
+1. userId sẽ được tự động lấy từ metadata (không cần user cung cấp trong message)
+2. Sử dụng tool `get_user_profile` để lấy thông tin tài khoản (không cần truyền userId, tool sẽ tự động lấy)
 3. Trả lời bằng text trình bày thông tin tài khoản (số dư, thông tin cá nhân, etc.)
 
 Khi người dùng hỏi về BẢNG XẾP HẠNG:

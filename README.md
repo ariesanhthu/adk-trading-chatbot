@@ -23,10 +23,10 @@ Agent sẽ tự động load MCP tools từ `vnstock-mcp-server` qua stdio trans
 #### Yêu cầu
 
 - Docker và Docker Compose đã cài đặt
-- File `.env` trong thư mục `test-adk/` với `GOOGLE_API_KEY`:
+- File `.env` trong thư mục `test-adk/` với `OPENROUTER_API_KEY`:
 
 ```env
-GOOGLE_API_KEY=AIza...        # BẮT BUỘC - Lấy từ https://aistudio.google.com/app/apikey
+OPENROUTER_API_KEY=sk-or-v1-...        # BẮT BUỘC - Lấy từ https://openrouter.ai/
 MCP_SERVER_URL=https://mcp-server-vietnam-stock-trading.onrender.com
 MCP_TIMEOUT=30
 ```
@@ -66,7 +66,7 @@ API sẽ chạy tại `http://localhost:8002`:
 
 Các biến môi trường có thể set trong `.env` hoặc override trong `docker-compose.yml`:
 
-- `GOOGLE_API_KEY` (bắt buộc): API key cho Google AI (Gemini)
+- `OPENROUTER_API_KEY` (bắt buộc): API key cho OpenRouter API (model: `openai/gpt-oss-120b:free`)
 - `MCP_SERVER_URL`: URL của MCP server (default trong `configs/mcp_config.yaml`)
 - `MCP_TIMEOUT`: Timeout cho MCP requests (default: 30)
 - `BACKEND_CORS_ORIGINS`: CORS origins cho FastAPI (default: `*`)

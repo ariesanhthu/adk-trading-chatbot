@@ -378,9 +378,16 @@ async def chat(
     # Parse UI effects
     ui_effects = parse_ui_effects(reply_text, user_message)
 
-    # Extract intent và generate suggestions
+    # Extract intent và generate suggestions với full conversation history
     intent = extract_intent(reply_text, user_message)
-    suggestions = generate_suggestions(reply_text, user_message, intent)
+    # Truyền payload.messages (ChatMessage list) thay vì conversation_history (dict list)
+    suggestions = generate_suggestions(
+        reply_text,
+        user_message,
+        intent,
+        conversation_history=payload.messages,
+        ui_effects=ui_effects,
+    )
 
     return ChatResponse(
         reply=reply_text,
@@ -423,9 +430,17 @@ def _create_runner(agent) -> Runner:
 def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
     runner = _create_runner(agent)
 
+    # Inject user_id vào user message để agent có thể sử dụng
+    # Format: [USER_ID: user_id] ở đầu message
+    enhanced_message = user_message
+    if user_id and user_id != "user-unknown":
+        # Chỉ inject nếu chưa có trong message
+        if f"User ID của mình là {user_id}" not in user_message:
+            enhanced_message = f"[USER_ID: {user_id}]\n{user_message}"
+
     content = types.Content(
         role="user",
-        parts=[types.Part(text=user_message)],
+        parts=[types.Part(text=enhanced_message)],
     )
 
     reply_text = ""
@@ -519,6 +534,15 @@ async def _run_agent(
     user_id = getattr(meta, "user_id", "user-unknown") if meta else "user-unknown"
     raw_session_id = getattr(meta, "session_id", None) if meta else None
     session_id = raw_session_id or "default-session"
+
+    # Set user_id vào backend_tools context để tools có thể sử dụng
+    if user_id and user_id != "user-unknown":
+        try:
+            from agents.backend_tools import _set_current_user_id
+
+            _set_current_user_id(user_id)
+        except Exception as e:
+            print(f"Warning: Failed to set user_id in backend_tools: {e}")
 
     try:
         await _ensure_session(user_id=user_id, session_id=session_id)

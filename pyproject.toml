@@ -6,13 +6,14 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "google-adk>=1.18.0",
-    "httpx>=0.24.0",  # HTTP client để gọi MCP server
-    "pyyaml>=6.0",  # Đọc config YAML
-    "fastapi>=0.104.0",  # FastAPI web framework
-    "uvicorn[standard]>=0.24.0",  # ASGI server
-    "pydantic>=2.0.0",  # Data validation
-    "pydantic-settings>=2.0.0",  # Settings management
-    "python-dotenv>=1.0.1",  # Load .env cho GOOGLE_API_KEY
+    "httpx>=0.24.0", # HTTP client để gọi MCP server
+    "pyyaml>=6.0", # Đọc config YAML
+    "fastapi>=0.104.0", # FastAPI web framework
+    "uvicorn[standard]>=0.24.0", # ASGI server
+    "pydantic>=2.0.0", # Data validation
+    "pydantic-settings>=2.0.0", # Settings management
+    "python-dotenv>=1.0.1", # Load .env cho GOOGLE_API_KEY
+    "litellm>=1.80.8",
 ]
 
 [project.optional-dependencies]
