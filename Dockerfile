@@ -50,7 +50,7 @@ EXPOSE 8002
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8002/health', timeout=5)" || exit 1
+    CMD python -c "import httpx; httpx.get('http://localhost:7860/health', timeout=5)" || exit 1
 
 # Run FastAPI server
 # FastAPI sẽ tự động load ADK agent từ agents/root_agent khi import

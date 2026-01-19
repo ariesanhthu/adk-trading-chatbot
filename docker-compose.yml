@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: vnstock-agent-api
     ports:
-      - "8002:8002"
+      - "7860:7860"
     environment:
       # Google AI API key (BẮT BUỘC)
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
@@ -15,7 +15,7 @@ services:
       - MCP_SERVER_URL=${MCP_SERVER_URL:-https://mcp-server-vietnam-stock-trading.onrender.com}
       - MCP_TIMEOUT=${MCP_TIMEOUT:-30}
       # Port nội bộ cho Uvicorn (run_server.py đọc từ biến PORT)
-      - PORT=8002
+      - PORT=7860
       # FastAPI settings (JSON array format cho list[str])
       # Nếu không set, sẽ dùng default ["*"] từ config.py
       # Để override, set trong .env: BACKEND_CORS_ORIGINS=["http://localhost:3000","http://localhost:8080"]
@@ -26,7 +26,7 @@ services:
       - ./configs:/app/configs:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8002/health', timeout=5)"]
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:7860/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
