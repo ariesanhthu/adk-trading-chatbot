@@ -1,14 +1,48 @@
+---
+title: "VNStock Agent with Google ADK"
+emoji: "📈"
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 # VNStock Agent với Google ADK
 
 Agent sử dụng Google ADK với MCPToolset để tích hợp với VNStock MCP Server.
 
-## Cài đặt
+## Deploy trên Hugging Face Spaces (Docker)
+
+Repo này được cấu hình làm **Docker Space** trên Hugging Face và sử dụng `Dockerfile` có sẵn.
+
+1. Tạo Space mới trên Hugging Face với loại **Docker**
+2. Kết nối Space với repo này (hoặc push bằng `git push hf main`)
+3. Trong tab _Settings → Variables_, thêm các biến môi trường tối thiểu:
+
+- `OPENROUTER_API_KEY` – khóa OpenRouter (bắt buộc)
+- `MCP_SERVER_URL` – URL MCP server (tùy chọn, mặc định trong `configs/mcp_config.yaml`)
+- `MCP_TIMEOUT` – timeout MCP (tùy chọn)
+
+Build của Space sẽ dùng `Dockerfile` để chạy FastAPI server qua `run_server.py` trên port 7860.
+
+Sau khi Space ở trạng thái **Running**, API sẽ có dạng:
+
+- Health check: `GET https://<tên-space>.hf.space/health`
+- Chat endpoint: `POST https://<tên-space>.hf.space/api/v1/chat`
+
+## Chạy local với uv
 
 ```bash
 uv sync
+uv run python run_server.py
 ```
 
-## Sử dụng
+API sẽ chạy tại `http://localhost:7860`:
+
+- Health check: `GET http://localhost:7860/health`
+- Chat endpoint: `POST http://localhost:7860/api/v1/chat`
+
+## Chạy với ADK CLI (local)
 
 ### Chạy với ADK Web
 
@@ -18,20 +52,9 @@ adk web --port 8001
 
 Agent sẽ tự động load MCP tools từ `vnstock-mcp-server` qua stdio transport.
 
-### Chạy với Docker (FastAPI + ADK)
+## Chạy với Docker (local, tuỳ chọn)
 
-#### Yêu cầu
-
-- Docker và Docker Compose đã cài đặt
-- File `.env` trong thư mục `test-adk/` với `OPENROUTER_API_KEY`:
-
-```env
-OPENROUTER_API_KEY=sk-or-v1-...        # BẮT BUỘC - Lấy từ https://openrouter.ai/
-MCP_SERVER_URL=https://mcp-server-vietnam-stock-trading.onrender.com
-MCP_TIMEOUT=30
-```
-
-#### Build và chạy
+Nếu muốn tự chạy Docker local (không dùng Hugging Face Space), có thể dùng `docker-compose`:
 
 ```bash
 cd test-adk
@@ -41,12 +64,6 @@ docker-compose build
 
 # Chạy container
 docker-compose up -d
-
-# Xem logs
-docker-compose logs -f
-
-# Dừng container
-docker-compose down
 ```
 
 API sẽ chạy tại `http://localhost:8002`:
@@ -54,22 +71,13 @@ API sẽ chạy tại `http://localhost:8002`:
 - Health check: `GET http://localhost:8002/health`
 - Chat endpoint: `POST http://localhost:8002/api/v1/chat`
 
-#### Cấu trúc Docker
+Các biến môi trường local có thể đặt trong file `.env`:
 
-- `Dockerfile`: Multi-stage build với Python 3.13, dùng `uv` để cài dependencies từ `pyproject.toml` và `uv.lock`
-- `docker-compose.yml`: Cấu hình service với env vars, health check, port mapping
-- `.dockerignore`: Loại trừ files không cần thiết khi build
-
-**Lưu ý**: Dockerfile sử dụng `uv sync --frozen` để cài dependencies, đảm bảo versions chính xác từ `uv.lock`. Cả FastAPI và ADK agent đều chạy trong cùng container.
-
-#### Environment Variables
-
-Các biến môi trường có thể set trong `.env` hoặc override trong `docker-compose.yml`:
-
-- `OPENROUTER_API_KEY` (bắt buộc): API key cho OpenRouter API (model: `openai/gpt-oss-120b:free`)
-- `MCP_SERVER_URL`: URL của MCP server (default trong `configs/mcp_config.yaml`)
-- `MCP_TIMEOUT`: Timeout cho MCP requests (default: 30)
-- `BACKEND_CORS_ORIGINS`: CORS origins cho FastAPI (default: `*`)
+```env
+OPENROUTER_API_KEY=sk-or-v1-...        # BẮT BUỘC - Lấy từ https://openrouter.ai/
+MCP_SERVER_URL=https://mcp-server-vietnam-stock-trading.onrender.com
+MCP_TIMEOUT=30
+```
 
 ### Cấu trúc
 
