@@ -1,0 +1,20 @@
+# promptfooconfig.yaml
+description: "ADK Trading Chatbot Evaluation"
+
+# Use the Python wrapper to talk to the agent
+providers:
+  - id: python:scripts/wrapper.py
+    label: "ADK Agent (Local)"
+
+prompts:
+  - "{{instruction}}"
+
+defaultTest:
+  options:
+    provider: 
+      id: ollama:llama3
+      config:
+        apiBase: http://localhost:11434
+
+# Check tests.csv for the data
+tests: tests.csv

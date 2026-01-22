@@ -661,6 +661,11 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
         session_id=session_id,
         new_message=content,
     ):
+        print(f"[DEBUG] Event received: type={type(event).__name__}")
+        try:
+            print(f"[DEBUG] Event content: {event}")
+        except:
+            pass
         # Parse event text từ nhiều cấu trúc khác nhau
         event_text = None
         event_author = getattr(event, "author", None)
@@ -710,17 +715,51 @@ def _run_blocking(agent, user_id: str, session_id: str, user_message: str):
 
         # Accumulate text từ model response
         # Ưu tiên lấy từ final response, nếu không có thì lấy từ tất cả model events
-        if event_text and event_author == "model":
-            # Nếu là final response, ưu tiên dùng text này (có thể clear và chỉ dùng final)
-            is_final = hasattr(event, "is_final_response") and getattr(
-                event, "is_final_response", False
-            )
-            if is_final:
-                # Final response - ưu tiên, nhưng vẫn append để giữ context
-                text_parts.append(event_text)
-            else:
-                # Intermediate response - append bình thường
-                text_parts.append(event_text)
+        
+        # Check valid author (model OR agent name)
+        is_valid_author = (
+            event_author == "model" 
+            or event_author == "vnstock_agent"
+            or (hasattr(event, "content") and getattr(event.content, "role", "") == "model")
+        )
+
+        if event_text and is_valid_author:
+            # Clean text if it is JSON
+            cleaned_text = event_text
+            should_use_text = True
+            
+            if event_text.strip().startswith("{"):
+                try:
+                    import json
+                    # Try to parse
+                    if "type" in event_text and "function" in event_text:
+                        # This is likely a tool definition, IGNORE it to trigger fallback
+                        should_use_text = False
+                    elif "message" in event_text:
+                        data = json.loads(event_text)
+                        if "message" in data:
+                            cleaned_text = data["message"]
+                        else:
+                             # JSON but no message, likely garbage
+                             should_use_text = False
+                    else:
+                        # Unknown JSON, ignore to be safe and trigger fallback
+                        should_use_text = False
+                except:
+                    # Not valid JSON, treat as text
+                    pass
+            
+            if should_use_text:
+                # Nếu là final response, ưu tiên dùng text này (có thể clear và chỉ dùng final)
+                is_final = hasattr(event, "is_final_response") and getattr(
+                    event, "is_final_response", False
+                )
+                if is_final:
+                    # Final response - ưu tiên, nhưng vẫn append để giữ context
+                    text_parts.append(cleaned_text)
+                else:
+                    # Intermediate response - append bình thường
+                    text_parts.append(cleaned_text)
 
     # Join tất cả text parts thành một response hoàn chỉnh
     # Nếu có nhiều parts, join bằng space để tạo đoạn văn liền mạch

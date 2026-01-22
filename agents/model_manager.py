@@ -185,6 +185,46 @@ class OpenRouterModelManager:
         return self.model_name
 
 
+class OllamaModelManager:
+    """Quản lý Ollama local model."""
+
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        timeout: float = 120.0,
+    ):
+        """
+        Khởi tạo OllamaModelManager.
+
+        Args:
+            model_name: Tên model (nếu None, lấy từ env OLLAMA_MODEL hoặc default ollama/llama3)
+            timeout: Timeout (default: 120s)
+        """
+        self.model_name = model_name or os.getenv("OLLAMA_MODEL", "ollama/llama3")
+        self.timeout = timeout
+        self.model: Optional[LiteLlm] = None
+        self._create_model()
+
+    def _create_model(self) -> LiteLlm:
+        """Tạo LiteLlm model với Ollama backend."""
+        print(f"🔧 Using Ollama model: {self.model_name}")
+        # LiteLLM format cho ollama: ollama/llama3
+        # api_base mặc định là http://localhost:11434
+        self.model = LiteLlm(
+            model=self.model_name,
+            timeout=self.timeout,
+            api_base="http://localhost:11434",
+        )
+        print(f"✅ Ollama model initialized: {self.model_name}")
+        return self.model
+
+    def get_model(self) -> LiteLlm:
+        return self.model
+
+    def get_model_name(self) -> str:
+        return self.model_name
+
+
 class ModelManager:
     """Quản lý model chính với khả năng chọn giữa Groq và OpenRouter."""
 
@@ -200,15 +240,19 @@ class ModelManager:
         self.model_name: str = ""
         self.groq_manager: Optional[GroqModelManager] = None
         self.openrouter_manager: Optional[OpenRouterModelManager] = None
+        self.ollama_manager: Optional[OllamaModelManager] = None
         self._initialize_model()
 
     def _initialize_model(self):
-        """Khởi tạo model (Groq hoặc OpenRouter)."""
-        # Kiểm tra xem dùng Groq hay OpenRouter
-        use_groq = self.config.get_env_var("USE_GROQ", "true").lower() == "true"
+        """Khởi tạo model (Groq, Ollama hoặc OpenRouter)."""
+        # Kiểm tra config
+        use_groq = self.config.get_env_var("USE_GROQ", "false").lower() == "true"
+        use_ollama = self.config.get_env_var("USE_OLLAMA", "false").lower() == "true"
         groq_api_key = self.config.get_env_var("GROQ_API_KEY")
 
-        if use_groq and groq_api_key:
+        if use_ollama:
+            self._initialize_ollama()
+        elif use_groq and groq_api_key:
             print("🔧 Using Groq models with auto-fallback")
             try:
                 self.groq_manager = GroqModelManager(
@@ -222,6 +266,17 @@ class ModelManager:
                 print("   Falling back to OpenRouter...")
                 self._initialize_openrouter()
         else:
+            self._initialize_openrouter()
+
+    def _initialize_ollama(self):
+        """Khởi tạo Ollama model."""
+        try:
+            self.ollama_manager = OllamaModelManager()
+            self.model = self.ollama_manager.get_model()
+            self.model_name = self.ollama_manager.get_model_name()
+        except Exception as e:
+            print(f"⚠️  Failed to initialize Ollama: {e}")
+            print("   Falling back to OpenRouter...")
             self._initialize_openrouter()
 
     def _initialize_openrouter(self):
