@@ -35,6 +35,7 @@ class VnstockMCP:
         self.base_url = self.config.get("base_url")
         self.mount_path = self.config.get("mount_path", "/sse")
         self.timeout = self.config.get("timeout", 15.0)
+        self.hf_token = os.getenv("HF_TOKEN")
 
         # Initialize client based on transport
         if self.transport == "streamable-http" and self.base_url:
@@ -155,6 +156,9 @@ class VnstockMCP:
                     "Content-Type": "application/json",
                     "Accept": "application/json",
                 }
+                # Thêm Authorization header nếu có HF_TOKEN và URL là HuggingFace
+                if self.hf_token and "huggingface.co" in self.base_url:
+                    headers["Authorization"] = f"Bearer {self.hf_token}"
                 # Thêm MCP-Protocol-Version header nếu cần
                 # headers["MCP-Protocol-Version"] = "2024-11-05"
 

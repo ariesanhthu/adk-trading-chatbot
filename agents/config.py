@@ -6,7 +6,7 @@ Quản lý việc load cấu hình từ file YAML và environment variables.
 
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ class AgentConfig:
         self._mcp_config = self._load_mcp_config()
         self.mcp_server_url = self._get_mcp_server_url()
         self.mcp_timeout = self._get_mcp_timeout()
+        self.hf_token = self._get_hf_token()
 
     def _load_mcp_config(self) -> Dict[str, Any]:
         """
@@ -72,6 +73,15 @@ class AgentConfig:
         return float(
             os.getenv("MCP_TIMEOUT", str(self._mcp_config.get("timeout", 60.0)))
         )
+
+    def _get_hf_token(self) -> Optional[str]:
+        """
+        Lấy HuggingFace token từ environment variable.
+
+        Returns:
+            HF_TOKEN nếu có, None nếu không
+        """
+        return os.getenv("HF_TOKEN")
 
     @staticmethod
     def get_env_var(key: str, default: Any = None) -> Any:

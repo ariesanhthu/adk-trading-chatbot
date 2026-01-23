@@ -25,6 +25,7 @@ class GroqModelManager:
     GROQ_MODELS = [
         "groq/llama-3.1-8b-instant",  # Ưu tiên 1: Model mặc định, cân bằng
         "groq/llama3-8b-8192",  # Ưu tiên 3: Model nhanh nhất
+        "groq/compound",
         "groq/llama-3.1-70b-versatile",  # Ưu tiên 2: Model lớn nhất, tốt nhất
         "groq/llama3-70b-8192",  # Ưu tiên 4: Model lớn nhất
     ]

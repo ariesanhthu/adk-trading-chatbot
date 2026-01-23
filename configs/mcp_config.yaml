@@ -6,7 +6,7 @@
 # ============================================================================
 
 mcp_server:
-  url: "https://mcp-server-vietnam-stock-trading.onrender.com"
+  url: "https://huggingface.co/api/spaces/Arischi05/mcp-vnstock"
   transport: "streamable-http"
   timeout: 30
 

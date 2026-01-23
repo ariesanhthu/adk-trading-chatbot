@@ -1,15 +1,20 @@
-"""Script test các endpoint của FastAPI backend."""
-
 import asyncio
 import json
+import os
 from typing import Any, Dict, List
 
 import httpx
+from dotenv import load_dotenv
 
-BASE_URL = "https://adk-trading-chatbot.onrender.com"
+load_dotenv()
+
+# BASE_URL = "https://adk-trading-chatbot.onrender.com"
+BASE_URL = "https://arischi05-adk-trading-stock.hf.space"
 # BASE_URL = "http://localhost:8002"  # Khớp với port được expose trong docker-compose
 HEALTH_ENDPOINT = f"{BASE_URL}/health"
 CHAT_ENDPOINT = f"{BASE_URL}/api/v1/chat"
+
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 # Các payload mẫu để kích hoạt intent phổ biến
 CHAT_SAMPLES: List[Dict[str, Any]] = [
@@ -263,7 +268,11 @@ CHAT_SAMPLES: List[Dict[str, Any]] = [
 async def check_health(client: httpx.AsyncClient, retries: int = 5) -> None:
     for attempt in range(1, retries + 1):
         try:
-            resp = await client.get(HEALTH_ENDPOINT)
+            headers = {}
+            if HF_TOKEN:
+                headers["Authorization"] = f"Bearer {HF_TOKEN}"
+
+            resp = await client.get(HEALTH_ENDPOINT, headers=headers)
             resp.raise_for_status()
             print("✅ /health:", resp.json())
             return
@@ -330,7 +339,11 @@ async def test_chat_samples(client: httpx.AsyncClient) -> None:
         print(f"{'='*60}")
 
         try:
-            resp = await client.post(CHAT_ENDPOINT, json=payload, timeout=60.0)
+            headers = {}
+            if HF_TOKEN:
+                headers["Authorization"] = f"Bearer {HF_TOKEN}"
+            
+            resp = await client.post(CHAT_ENDPOINT, json=payload, headers=headers, timeout=60.0)
             print(f"Status: {resp.status_code}")
 
             if resp.status_code != 200:

@@ -30,6 +30,7 @@ class MCPClient:
         self.config = config or AgentConfig()
         self.server_url = self.config.mcp_server_url
         self.timeout = self.config.mcp_timeout
+        self.hf_token = self.config.hf_token
         self.session_id: Optional[str] = None
 
     def _parse_sse_response(self, response_text: str) -> Optional[Dict[str, Any]]:
@@ -53,6 +54,22 @@ class MCPClient:
         except Exception as e:
             print(f"Error parsing SSE response: {e}")
             return None
+
+    def _get_headers(self) -> Dict[str, str]:
+        """
+        Tạo headers cho HTTP request, bao gồm Authorization nếu có HF_TOKEN.
+
+        Returns:
+            Dict chứa headers
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        # Thêm Authorization header nếu có HF_TOKEN và URL là HuggingFace
+        if self.hf_token and "huggingface.co" in self.server_url:
+            headers["Authorization"] = f"Bearer {self.hf_token}"
+        return headers
 
     def _parse_response(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """
@@ -113,10 +130,7 @@ class MCPClient:
                     for endpoint in self.ENDPOINTS:
                         try:
                             url = f"{self.server_url}{endpoint}"
-                            headers = {
-                                "Content-Type": "application/json",
-                                "Accept": "application/json, text/event-stream",
-                            }
+                            headers = self._get_headers()
 
                             resp = client.post(url, json=payload, headers=headers)
 
@@ -163,7 +177,7 @@ class MCPClient:
                                     "method": "notifications/initialized",
                                     "params": {},
                                 }
-                                init_headers = headers.copy()
+                                init_headers = self._get_headers()
                                 init_headers["mcp-session-id"] = session_id
                                 client.post(
                                     url, json=initialized_payload, headers=init_headers
@@ -269,11 +283,8 @@ class MCPClient:
                 for endpoint in self.ENDPOINTS:
                     try:
                         url = f"{self.server_url}{endpoint}"
-                        headers = {
-                            "Content-Type": "application/json",
-                            "Accept": "application/json, text/event-stream",
-                            "mcp-session-id": self.session_id,
-                        }
+                        headers = self._get_headers()
+                        headers["mcp-session-id"] = self.session_id
 
                         resp = client.post(url, json=payload, headers=headers)
 
